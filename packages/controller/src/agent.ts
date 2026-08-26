@@ -53,6 +53,17 @@ export interface TurnOptions {
   anchor?: Anchor;
   /** What the reader TOUCHED, when the turn began with a click rather than a sentence. */
   selection?: Selection;
+  /**
+   * What the pages this turn writes turned out to LOOK like, arriving from the
+   * client while the turn is still running. Drained into the tool results
+   * beside the validator's problems, because both answer the same question —
+   * what is wrong with the page you just wrote — and the agent can only act on
+   * either one while it still has steps left.
+   */
+  notes?: { drain(): string | null };
+  /** What the reader has already taken and answered on this site. */
+  answered?: Record<string, string>;
+  chosen?: Record<string, string>;
   effort?: Effort;
   signal?: AbortSignal;
 }
@@ -143,6 +154,8 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
         ask: o.ask, site, pastAsks: o.pastAsks,
         ...(o.anchor ? { anchor: o.anchor } : {}),
         ...(o.selection ? { selection: o.selection } : {}),
+        ...(o.answered ? { answered: o.answered } : {}),
+        ...(o.chosen ? { chosen: o.chosen } : {}),
       }));
 
       let nudged = false;
@@ -210,8 +223,11 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
           });
 
           await flush();
-          const notes = [watcher.drainFeedback(), budgetNote(MAX_STEPS - steps - 1)]
-            .filter(Boolean).join("\n\n");
+          const notes = [
+            watcher.drainFeedback(),
+            o.notes?.drain() ?? null,
+            budgetNote(MAX_STEPS - steps - 1),
+          ].filter(Boolean).join("\n\n");
           convo.toolResult(call.id, "shell", notes ? `${r.text}\n\n${notes}` : r.text, false);
         }
       }

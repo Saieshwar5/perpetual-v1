@@ -23,6 +23,8 @@
  */
 export type Fit = "single" | "columns" | "scroll";
 
+import type { BlockOverflow, PageRender } from "@perpetual/shared/render";
+
 /**
  * @param sheet the scroller
  * @param doc   the document inside it
@@ -47,6 +49,81 @@ export function fitPage(sheet: HTMLElement, doc: HTMLElement, allow = true): Fit
 
   sheet.classList.remove("fits");
   return "scroll";
+}
+
+/**
+ * The same test, run for its ANSWER rather than for its effect.
+ *
+ * `fitPage` leaves the winning layout applied, which is exactly right when the
+ * reader is looking at a finished page and exactly wrong while one is being
+ * written: a page that flips into two columns halfway through being assembled
+ * and back out again a second later is worse than one that waits. So this
+ * saves the classes, asks the question, and puts them back.
+ *
+ * Nothing paints in between — the whole thing is synchronous, and the browser
+ * has no opportunity to draw an intermediate state — so the reader sees the
+ * page they were already reading while the agent gets told what it made.
+ */
+export function probePage(sheet: HTMLElement, doc: HTMLElement, allow = true): {
+  fit: Fit; screens: number;
+} {
+  const hadFits = sheet.classList.contains("fits");
+  const hadCols = doc.classList.contains("cols-2");
+  try {
+    const fit = fitPage(sheet, doc, allow);
+    // Measured in the single-column state, because that is the state the
+    // agent can do something about: it can shorten a page, and it cannot
+    // choose whether the page is given columns.
+    sheet.classList.add("fits");
+    doc.classList.remove("cols-2");
+    const screens = sheet.clientHeight > 0
+      ? Math.round((sheet.scrollHeight / sheet.clientHeight) * 10) / 10
+      : 1;
+    return { fit, screens };
+  } finally {
+    sheet.classList.toggle("fits", hadFits);
+    doc.classList.toggle("cols-2", hadCols);
+  }
+}
+
+/**
+ * Everything about the deck as it actually rendered, for the agent that wrote
+ * it. Read-only: see `probePage`.
+ *
+ * The overflow pass looks only at the two blocks that CAN overflow — code and
+ * tables, the two that scroll sideways inside their own frame. A figure scales
+ * and prose wraps, so neither can be too wide by construction.
+ */
+export function measureDeck(
+  deck: HTMLElement, allow = true,
+): { width: number; pages: PageRender[] } {
+  const pages: PageRender[] = [];
+  for (const panel of deck.querySelectorAll<HTMLElement>(".panel")) {
+    const sheet = panel.querySelector<HTMLElement>(".sheet");
+    const doc = panel.querySelector<HTMLElement>(".doc");
+    const page = panel.dataset.page;
+    if (!sheet || !doc || !page) continue;
+
+    const { fit, screens } = probePage(sheet, doc, allow);
+
+    const wide: BlockOverflow[] = [];
+    for (const [i, node] of [...doc.children].entries()) {
+      if (!(node instanceof HTMLElement)) continue;
+      const scroller = node.querySelector<HTMLElement>(".tscroll, code");
+      if (!scroller) continue;
+      const wants = scroller.scrollWidth;
+      const has = scroller.clientWidth;
+      if (wants > has + 1) {
+        wide.push({
+          kind: node.classList.contains("tablewrap") ? "table" : "code",
+          wants, has,
+          ...(node.dataset.blockId ? { id: node.dataset.blockId } : { id: `#${i}` }),
+        });
+      }
+    }
+    pages.push({ page, fit, screens, wide });
+  }
+  return { width: deck.clientWidth, pages };
 }
 
 /**

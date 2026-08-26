@@ -16,6 +16,7 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Block } from "@perpetual/shared/blocks";
+import { choiceKey, doorKey } from "@perpetual/shared/site";
 import type { Anchor, Selection, Site } from "@perpetual/shared/site";
 
 const PROMPTS = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
@@ -106,8 +107,61 @@ function describeSelection(sel: Selection): string {
     "rewrite the choice — the reader's answer stays on the page as the record of it.";
 }
 
+/**
+ * What the reader DID with what was written — the other half of perception.
+ *
+ * The agent has always been told what was asked and never what happened next.
+ * So it could not learn the things that only show up over a session: that its
+ * doors are being ignored, which usually means they are too vague to be worth
+ * clicking; that a choice it asked went unanswered, which usually means the
+ * reader did not care and it should have picked one and said so.
+ *
+ * All of it is already on disk — the session records every door taken and
+ * every choice answered. It has simply never been read back out.
+ *
+ * Counts and names only. A conclusion here ("your doors are bad") would be the
+ * harness doing the agent's thinking for it, and it would be wrong as often as
+ * not: two doors out of six is a bad hit rate on a reference page and a fine
+ * one on a page the reader was only passing through.
+ */
+function describeEngagement(
+  site: Site, answered: Record<string, string>, chosen: Record<string, string>,
+): string | null {
+  let doors = 0, taken = 0;
+  const unanswered: string[] = [];
+
+  for (const page of site.pages) {
+    for (const b of page.blocks) {
+      if (b.kind === "next") {
+        doors += b.items.length;
+        for (const q of b.items) {
+          if (answered[doorKey(page.id, q)] ?? answered[q]) taken++;
+        }
+      } else if (b.kind === "choice" && b.id) {
+        if (!chosen[choiceKey(page.id, b.id)]) unanswered.push(`${page.id}/${b.id}`);
+      }
+    }
+  }
+
+  const lines: string[] = [];
+  if (doors) {
+    lines.push(`  ${taken} of ${doors} door${doors === 1 ? "" : "s"} you offered ` +
+      `${taken === 1 ? "has" : "have"} been taken.`);
+  }
+  if (unanswered.length) {
+    lines.push(`  Still unanswered: ${unanswered.join(", ")}. A choice the reader ` +
+      "walks past is one they did not need — decide it yourself and say which way " +
+      "you went.");
+  }
+  return lines.length ? `\nWhat the reader has done here:\n${lines.join("\n")}` : null;
+}
+
 export function turnMessage(
-  opts: { ask: string; site: Site; pastAsks: string[]; anchor?: Anchor; selection?: Selection },
+  opts: {
+    ask: string; site: Site; pastAsks: string[];
+    anchor?: Anchor; selection?: Selection;
+    answered?: Record<string, string>; chosen?: Record<string, string>;
+  },
 ): string {
   const parts: string[] = [];
 
@@ -150,6 +204,11 @@ export function turnMessage(
       );
     }
   }
+
+  const engagement = describeEngagement(
+    opts.site, opts.answered ?? {}, opts.chosen ?? {},
+  );
+  if (engagement) parts.push(engagement);
 
   if (opts.selection) parts.push(describeSelection(opts.selection));
 

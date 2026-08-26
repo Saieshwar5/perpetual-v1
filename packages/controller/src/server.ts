@@ -20,6 +20,8 @@ import { readSite } from "./site.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
 import { choiceKey, doorKey, type Selection } from "@perpetual/shared/site";
+import { NoteQueue } from "./notes.ts";
+import type { RenderReport } from "@perpetual/shared/render";
 
 // Anchored to this module, never to process.cwd(): `pnpm dev` runs the server
 // from packages/controller, where a cwd-relative path silently resolves wrong.
@@ -39,6 +41,21 @@ const NET = process.env.PERPETUAL_NET === "1";
 
 const store = new SessionStore(ROOT);
 const inFlight = new Set<string>();
+
+/**
+ * The turns currently running, so a report from the client can reach the agent
+ * that is still writing.
+ *
+ * This is the only place the server holds state that is not on disk, and it is
+ * held for seconds: a render report is only useful to the turn that caused it,
+ * and a turn that has ended has nothing left to fix.
+ */
+interface ActiveTurn {
+  notes: NoteQueue;
+  /** Pages this turn has written. A note about any other page is unactionable. */
+  touched: Set<string>;
+}
+const active = new Map<string, ActiveTurn>();
 
 /** How long an unused session survives before the sweep takes it. */
 const SWEEP_GRACE_MS = 10 * 60_000;
@@ -116,6 +133,10 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
     await store.write(index);
   }
 
+  const notes = new NoteQueue();
+  const touched = new Set<string>();
+  active.set(id, { notes, touched });
+
   inFlight.add(id);
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -141,12 +162,23 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
       },
     } : {}),
     ...(selection?.page && selection.option ? { selection } : {}),
+    notes,
+    answered: index.answered,
+    chosen: index.chosen,
     signal: ac.signal,
     ...(process.env.PERPETUAL_EFFORT ? { effort: process.env.PERPETUAL_EFFORT as never } : {}),
   });
 
   try {
-    for await (const ev of stream) send(ev);
+    for await (const ev of stream) {
+      // Which pages this turn is responsible for, known as it goes rather than
+      // at the end — a report arrives mid-turn or it arrives too late.
+      if (ev.type === "page_open" || ev.type === "page_replace") touched.add(ev.page.id);
+      else if (ev.type.startsWith("page_") && "page" in ev && typeof ev.page === "string") {
+        touched.add(ev.page);
+      }
+      send(ev);
+    }
     const s = await stream.summary;
 
     const site = await readSite(store.siteDir(id));
@@ -190,9 +222,33 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
       stopped: "error", error: message,
     }).catch(() => {});
   } finally {
+    active.delete(id);
     inFlight.delete(id);
     res.end();
   }
+}
+
+/**
+ * The client saying what a page turned out to look like.
+ *
+ * The only route that carries information the OTHER way — everywhere else the
+ * client asks and the server answers. It is fire-and-forget by design: this is
+ * advice for an agent, and a report that misses its turn is worth nothing but
+ * must cost nothing either, so a late one is accepted and dropped rather than
+ * failing anything the reader can see.
+ */
+async function rendered(req: IncomingMessage, res: ServerResponse, id: string) {
+  const body = await new Promise<string>((r) => {
+    let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b));
+  });
+  const turnNow = active.get(id);
+  // No turn running: nobody is left who could act on it.
+  if (!turnNow) return json(res, 204, {});
+  try {
+    const report = JSON.parse(body || "{}") as RenderReport;
+    if (Array.isArray(report.pages)) turnNow.notes.add(report, turnNow.touched);
+  } catch { /* a malformed report is not worth a word to anyone */ }
+  return json(res, 204, {});
 }
 
 const server = createServer(async (req, res) => {
@@ -219,10 +275,11 @@ const server = createServer(async (req, res) => {
       return json(res, 200, await store.list());
     }
 
-    const m = /^\/sessions\/([a-f0-9]+)(\/turn|\/site)?$/.exec(p);
+    const m = /^\/sessions\/([a-f0-9]+)(\/turn|\/site|\/rendered)?$/.exec(p);
     if (m) {
       const id = m[1]!;
       if (m[2] === "/turn" && req.method === "POST") return await turn(req, res, id);
+      if (m[2] === "/rendered" && req.method === "POST") return await rendered(req, res, id);
       if (!m[2] && req.method === "DELETE") {
         if (inFlight.has(id)) return json(res, 409, { error: "a turn is running" });
         await store.remove(id);
