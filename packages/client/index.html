@@ -38,6 +38,20 @@
   </div>
 </section>
 
+<!-- What the product can do without the mouse. Nothing surfaced this before,
+     so ⌘K, / and PageUp/PageDown were features only the source knew about. -->
+<div class="keys" id="keys" hidden>
+  <h2>Keyboard</h2>
+  <dl>
+    <dt>⌘K</dt><dd>ask something</dd>
+    <dt>/</dt><dd>ask something</dd>
+    <dt>Esc</dt><dd>stop pointing at a block, then close</dd>
+    <dt>PageUp / PageDown</dt><dd>move between pages</dd>
+    <dt>?</dt><dd>this list</dd>
+  </dl>
+  <button class="railbtn" id="keysclose" type="button">Close</button>
+</div>
+
 <!-- ALTITUDE 2 — a session. Fixed chrome; the deck in the middle is the agent's. -->
 <section class="view sess" id="session" hidden>
   <!-- No horizontal bar. On a laptop the scarce dimension is height and the
@@ -49,6 +63,11 @@
     <div class="railtop">
       <button class="railbtn" id="back" type="button" aria-label="Back to the library">←</button>
       <span class="stitle wide" id="stitle"></span>
+      <!-- Opening the rail is a decision. It used to happen on hover, which
+           meant brushing the left edge covered a quarter of the page you were
+           reading with a panel you had not asked for. -->
+      <button class="railbtn railtoggle" id="railtoggle" type="button"
+              aria-expanded="false" aria-label="Show the pages in this session">☰</button>
     </div>
 
     <div class="railmid" id="railmid"></div>
@@ -56,11 +75,17 @@
     <div class="railfoot">
       <span class="count" id="scount"></span>
       <button class="railbtn" id="prefsbtn" type="button"
-              aria-expanded="false" aria-label="Reading settings">Aa</button>
+              aria-expanded="false" aria-label="Settings">⚙</button>
       <span class="dot narrow" id="modedot"></span>
+      <!-- The environment, where the environment already lives. The model
+           belongs here rather than on the composer: it is a fact about the
+           session, and the composer is already carrying the aim, the status
+           and the turn. -->
       <div class="env wide">
         <span class="chip" id="badge"></span>
+        <span class="chip" id="model"></span>
         <span class="chip" id="sandbox"></span>
+        <span class="chip spent" id="spent" hidden></span>
       </div>
     </div>
   </aside>
@@ -70,6 +95,7 @@
   <!-- Reader settings. Chrome, never the canvas: the agent cannot see or
        reach any of this. Anchored beside the rail's foot, where its button is. -->
   <div class="prefs" id="prefs" hidden>
+    <div class="pgroup">Appearance</div>
     <div class="prow">
       <span>Theme</span>
       <div class="seg" data-key="theme">
@@ -78,6 +104,7 @@
         <button type="button" data-v="dark">Dark</button>
       </div>
     </div>
+    <div class="pgroup">Reading</div>
     <div class="prow">
       <span>Text size</span>
       <div class="seg" data-key="type">
@@ -112,7 +139,11 @@
   <div class="pill" id="pill" data-state="idle">
     <button class="invite" type="button">Ask <kbd>⌘K</kbd></button>
 
-    <div class="aim" hidden></div>
+    <!-- What the question points at, and the way to stop pointing at it. -->
+    <div class="aim" hidden>
+      <span class="aimtext"></span>
+      <button class="aimoff" type="button" aria-label="Ask about the page instead">×</button>
+    </div>
 
     <form class="pform">
       <input type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Ask">
@@ -120,9 +151,18 @@
     </form>
 
     <div class="work">
-      <code class="cmd"></code>
+      <!-- What is happening, in words. The command that produced it is one
+           click away rather than in the reader's face: hidden by default,
+           never deleted, because when something fails it is the only thing
+           that explains it. -->
+      <span class="verb"></span>
+      <button class="rawbtn" type="button" aria-expanded="false"
+              aria-label="Show the command being run">⋯</button>
       <button class="stop" type="button" aria-label="Stop this turn">■</button>
-      <pre class="out"></pre>
+      <div class="raw" hidden>
+        <code class="cmd"></code>
+        <pre class="out"></pre>
+      </div>
     </div>
 
     <div class="pstatus"></div>
