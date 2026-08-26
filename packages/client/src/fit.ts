@@ -127,16 +127,65 @@ export function measureDeck(
 }
 
 /**
- * Re-fit every page. Cheap enough to call on a settled turn, a resize, or a
- * change of reading dial — a session holds a handful of pages, and each test
- * is two forced layouts.
+ * Re-fit every page — as ONE decision about the site, not six about pages.
+ *
+ * The per-page version produced a website whose pages had different shapes: in
+ * a real six-page session, five pages were one 864px column and the sixth was
+ * two columns at 1334px. Each verdict was individually correct and the result
+ * looked broken, because whether a page "fits" is a property of the reader's
+ * WINDOW — its height, their text size, the exact block mix — and not of the
+ * site. Nothing the reader could see explained why one page was different, and
+ * resizing the window could flip it back.
+ *
+ * The rule, and the strict half is the important one:
+ *
+ *   no page overflows                    -> single everywhere, nothing to fix
+ *   EVERY page overflows AND fits in two -> columns everywhere
+ *   anything else                        -> single everywhere
+ *
+ * It has to be EVERY, twice over. A page that scrolls IN two columns is the
+ * exact failure columns exist to avoid — read down the left, scroll back up,
+ * read down the right — so one page that cannot be rescued sends the whole
+ * site back to one column. And a page that already fits in one column would be
+ * split into two half-empty ones, which looks like a mistake, so a single
+ * short page also keeps the site single. The bias is toward the layout that is
+ * never wrong.
  */
 export function fitAll(deck: HTMLElement, allow = true): Record<Fit, number> {
-  const tally: Record<Fit, number> = { single: 0, columns: 0, scroll: 0 };
+  const panels: { sheet: HTMLElement; doc: HTMLElement }[] = [];
   for (const panel of deck.querySelectorAll<HTMLElement>(".panel")) {
     const sheet = panel.querySelector<HTMLElement>(".sheet");
     const doc = panel.querySelector<HTMLElement>(".doc");
-    if (sheet && doc) tally[fitPage(sheet, doc, allow)]++;
+    if (sheet && doc) panels.push({ sheet, doc });
+  }
+
+  // Measure first, decide once, then apply. Applying as we measure is how the
+  // per-page version ended up unable to see the site at all.
+  const seen = panels.map(({ sheet, doc }) => probePage(sheet, doc, allow));
+  const columnsEverywhere = allow
+    && seen.length > 0
+    && seen.every((f) => f.fit === "columns");
+
+  const tally: Record<Fit, number> = { single: 0, columns: 0, scroll: 0 };
+  for (const [i, { sheet, doc }] of panels.entries()) {
+    const verdict = columnsEverywhere ? "columns" : applySingle(sheet, doc);
+    if (columnsEverywhere) {
+      sheet.classList.add("fits");
+      doc.classList.add("cols-2");
+    }
+    tally[verdict]++;
+    void seen[i];
   }
   return tally;
+}
+
+/** Lay a page out in one column, and say whether it needed to scroll. */
+function applySingle(sheet: HTMLElement, doc: HTMLElement): Fit {
+  doc.classList.remove("cols-2");
+  sheet.classList.add("fits");
+  if (sheet.scrollHeight > sheet.clientHeight + 1) {
+    sheet.classList.remove("fits");
+    return "scroll";
+  }
+  return "single";
 }

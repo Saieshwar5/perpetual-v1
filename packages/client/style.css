@@ -133,16 +133,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .sub { margin: 8px 0 0; color: var(--ink-2); font-size: .95rem; }
 
-/* The composer's third home. Not floating and not docked — on this view it is
-   the primary action, so it sits in the reading order between the title and
-   the grid: here is what this is, ask something, or pick up where you left. */
+/* The composer's other home. On this view it is the primary action, so it sits
+   in the reading order between the title and the grid: here is what this is,
+   ask something, or pick up where you left. */
 .libhost { margin-bottom: 10px; }
-.libhost .pill {
+/* Always full here: on the library there is no page to be quiet about, and
+   asking is the only thing to do. */
+.libhost .pill,
+.libhost .pill[data-size="min"] {
   width: 100%;
   background: var(--surface); border: 1px solid var(--line-2); border-radius: 13px;
   box-shadow: 0 10px 28px -24px rgba(0, 0, 0, .5);
 }
-.libhost .pill .pform { padding: 13px 15px; }
+.libhost .pill { border: 1px solid var(--line-2); border-radius: 13px; padding: 6px; }
+.libhost .pill .pform { display: flex; padding: 13px 15px; }
+.libhost .pill .invite { display: none; }
 .libhost .pill .invite { padding: 13px 15px; }
 
 .matchline {
@@ -328,12 +333,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc.cols-2 > p { break-inside: auto; orphans: 2; widows: 2; }
 .doc.cols-2 > h2 { break-after: avoid; }
 
-/* A page that fits has no end to be pushed past, so the dock stops reserving
-   room for the push and tightens up. Every pixel it gives back is a pixel of
-   page that fits. */
-.sheet.fits .dock { padding-bottom: 1rem; }
-.sheet.fits .pill.docked { padding-top: 10px; }
+/* A page that fits has nothing to scroll. */
 .sheet.fits { overflow-y: hidden; }
+
+/* Room for the composer, and only where it is actually full size.
+   Every page used to end with a `.dock` reserving 26vh — a quarter of the
+   screen, on every page, for one composer that can only be in one of them. The
+   hairline needs almost nothing; the last page needs enough that a full-size
+   composer never covers the final blocks. Constant regardless of the
+   composer's current size, so growing it cannot change what "at the bottom"
+   means and start an oscillation. */
+.doc { padding-bottom: 4.5rem; }
+.deck .panel:last-child .doc { padding-bottom: 9rem; }
 
 /* The internal scroller. `overscroll-behavior: contain` stops a boundary
    scroll leaking to the document and bouncing the whole app. */
@@ -513,14 +524,24 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ----------------------------------------------------------- composer */
 
-/* The composer is ONE element in two homes. Floating, it is a small raised
-   pill over the page; docked, it flattens into a rule at the end of the
-   document and stops looking like an overlay at all. Both are the same node,
-   moved — so there is never a floating button competing with an inline link. */
+/* ONE element, ONE home, two sizes. Mid-page it is a hairline carrying the
+   page number; it becomes an input when a block is pointed at, when a turn is
+   running, or at the end of the last page. It used to be re-parented into a
+   `.dock` inside each page, which cost every page a quarter-screen of reserved
+   space and blurred whatever was focused each time it moved. */
 
 .floathost {
   position: absolute; left: var(--rail); right: 0; bottom: 0; z-index: 28;
   display: flex; justify-content: center; padding: 0 var(--gutter) 26px;
+  pointer-events: none;
+}
+/* The page has to stop before the composer does, or a hairline with no card
+   behind it has text running straight through it. A card would have occluded
+   it — that is what the old raised pill was doing — but a card is the thing we
+   are trying not to have on the page. So the page fades out instead. */
+.floathost::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 130px;
+  background: linear-gradient(to top, var(--bg) 0%, var(--bg) 52%, transparent 100%);
   pointer-events: none;
 }
 .floathost > * { pointer-events: auto; }
@@ -536,36 +557,46 @@ button { font: inherit; color: inherit; cursor: pointer; }
   box-shadow: 0 14px 34px -24px rgba(0, 0, 0, .6);
   transition: border-color .15s, box-shadow .18s var(--ease);
 }
-/* Resting, it is a line rather than a card: the page is what matters, and a
-   permanent input box is what makes something look like a chat. It wakes on a
-   real intention — focus, an open state, a running turn — and not on hover
-   alone, because a box that inflates as the pointer crosses it is jumpy. */
-.pill[data-state="idle"]:not(.docked) {
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  border-color: var(--line);
+/* THE HAIRLINE. The page is what matters; a permanent input box is what makes
+   something look like a chat. So mid-page the composer is a rule with the page
+   number on it, and it grows only when there is a reason: a block pointed at,
+   a turn running, or the end of the last page. Never on hover — a box that
+   inflates as the pointer crosses it is jumpy. */
+.pill[data-size="min"] {
+  background: none;
+  border: 0; border-top: 1px solid var(--line);
+  border-radius: 0;
   box-shadow: none;
-  padding: 2px;
-  backdrop-filter: blur(6px);
+  padding: 0;
+  transition: border-color .15s, opacity .15s;
 }
-.pill[data-state="idle"]:not(.docked) .invite { padding: 6px 11px; font-size: .82rem; }
-.pill[data-state="idle"]:not(.docked):hover {
-  border-color: var(--line-2);
-  background: var(--surface);
+.pill[data-size="min"] .invite {
+  justify-content: center; gap: 10px;
+  padding: 7px 12px; font-size: .72rem; color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
+.pill[data-size="min"] kbd { margin-left: 0; opacity: .5; }
+.pill[data-size="min"]:hover { border-top-color: var(--line-2); }
+.pill[data-size="min"]:hover .invite { color: var(--ink-2); }
+.pill[data-size="min"]:hover kbd { opacity: 1; }
+
+/* Full and idle means the reader is expected to type, so the field is already
+   there rather than behind one more click. */
+.pill[data-size="full"][data-state="idle"] .pform { display: flex; }
+.pill[data-size="full"][data-state="idle"] .invite { display: none; }
+.pill[data-size="full"] .pos { display: none; }
 .pill:focus-within {
   border-color: var(--accent);
   box-shadow: 0 14px 34px -24px rgba(0, 0, 0, .6);
   padding: 6px;
 }
 
-/* Docked: no card, no shadow — it reads as the last line of the page. */
-.dock { padding: 0 var(--gutter) 26vh; }
-/* The same box as the page, gutter included — `box-sizing: border-box` means
-   the padding eats into the cap, so the pill inside lands exactly on --column,
-   which is where the last paragraph above it ends. */
-.dock { max-width: var(--page); margin: 0 auto; }
-.pill.docked {
-  width: 100%; background: none; border: 0; border-top: 1px solid var(--line);
+/* At the end of the site the composer stops looking like an overlay and reads
+   as the document ending: a hairline above it, no shadow, no card. That
+   quality used to come free from being re-parented into the page; keeping it
+   now is deliberate. */
+.deck.atend ~ .floathost .pill[data-size="full"] {
+  background: none; border: 0; border-top: 1px solid var(--line);
   border-radius: 0; box-shadow: none; padding: 14px 0 0;
 }
 
@@ -577,13 +608,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: .88rem; color: var(--ink-2); text-align: left; width: 100%;
 }
 .pill .invite:hover { background: var(--surface-2); color: var(--ink); }
-.pill.docked .invite { padding-left: 0; color: var(--accent); }
-.pill.docked .invite:hover { background: none; text-decoration: underline; }
 .pill kbd {
   margin-left: auto; font-family: var(--mono); font-size: .68rem; color: var(--ink-3);
   border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
 }
-.pill.docked kbd { margin-left: 12px; }
 
 /* --- state: open ------------------------------------------------------- */
 
@@ -642,7 +670,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   min-height: 1.05em; padding: 0 12px 4px; font-size: .74rem; color: var(--ink-3);
   text-align: center;
 }
-.pill.docked .pstatus { text-align: left; padding-left: 0; }
+.deck.atend ~ .floathost .pstatus { text-align: left; padding-left: 0; }
 .pill .pstatus.work { color: var(--accent); }
 .pill .pstatus.bad { color: var(--warn); }
 .pill .retry {
@@ -796,7 +824,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .pill .aimoff:hover { opacity: 1; background: var(--surface-2); }
 .pill .aim:not(.cancellable) .aimoff { display: none; }
-.pill.docked .aim { padding-left: 0; }
+.deck.atend ~ .floathost .aim { padding-left: 0; }
 .pill[data-state="idle"] .aim { display: none; }
 .pill[data-state="busy"] .aim { color: var(--ink-2); font-style: italic; }
 

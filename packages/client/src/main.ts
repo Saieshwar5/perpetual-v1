@@ -34,7 +34,6 @@ const grid = $("grid");
 const deckHost = $("deck");
 const railHost = $("rail");
 const titleEl = $("stitle");
-const countEl = $("scount");
 
 const deck = new Deck(deckHost);
 const rail = new Rail(railHost, $("railmid"));
@@ -129,16 +128,13 @@ function makePanel(page: Page) {
   // The layout modes are the whole of "layout freedom" (plans/16 §7): four
   // compositions we style, rather than a stylesheet the agent writes.
   doc.className = `doc lay-${page.layout ?? "column"}`;
-  // Where the composer lands when the reader reaches the end of this page.
-  const dock = document.createElement("div");
-  dock.className = "dock";
-  sheet.append(doc, dock);
+  sheet.append(doc);
   root.append(sheet);
   const acts = actionsFor(page.id);
   for (const b of page.blocks) appendBlock(doc, b, acts);
   sheet.addEventListener("scroll", () => { if (page.id === deck.activeId) placeComposer(); },
     { passive: true });
-  return { root, sheet, doc, dock };
+  return { root, sheet, doc };
 }
 
 function addPage(page: Page, opts: { goto?: boolean } = {}) {
@@ -228,12 +224,12 @@ function refit() {
 function paintRail() {
   rail.set(pages.map((p) => ({ id: p.id, ask: p.ask ?? "", title: p.title })));
   rail.setActive(deck.index);
-  countEl.textContent = pages.length ? `${deck.index + 1} / ${pages.length}` : "";
+  composer.position(pages.length ? `${deck.index + 1} / ${pages.length}` : "");
 }
 
 deck.onChange = (i, id) => {
   rail.setActive(i);
-  countEl.textContent = pages.length ? `${i + 1} / ${pages.length}` : "";
+  composer.position(pages.length ? `${i + 1} / ${pages.length}` : "");
   // Moving to another page drops the aim. A block the reader has scrolled past
   // is a reminder they can go back to; one on a page they have LEFT is a claim
   // about something they are no longer looking at.
@@ -242,23 +238,41 @@ deck.onChange = (i, id) => {
 };
 
 /**
- * Dock the composer at the end of the current page, or float it. The test is
- * the same "am I at the bottom" that force-scroll already computes, so a page
- * short enough not to scroll is always docked — which is correct.
+ * Is the reader out of website?
+ *
+ * The composer used to inflate at the bottom of EVERY page, and that was the
+ * wrong moment: the bottom of page 3 of 6 does not mean "you are finished, ask
+ * something" — it means "keep going, there is more", and the gesture that
+ * belongs there is the force-scroll to page 4. Interrupting it with a full
+ * input box argues against the one movement the product is built around.
+ *
+ * The bottom of the LAST page is different. There is nothing left to scroll
+ * to, so asking is honestly the next step.
+ */
+let atSiteEnd = false;
+
+/**
+ * Size the composer for where the reader is.
+ *
+ * There is one composer and one home. It used to be re-parented into a `.dock`
+ * built into every page — N docks for one composer, 26vh of reserved space at
+ * the end of each of them, and a re-parent that blurred whatever was focused
+ * (which is why docking had to be blocked whenever the reader was mid-sentence).
+ * All of that is now a class on one element.
  */
 function placeComposer() {
   const id = deck.activeId;
-  const panel = id ? deckHost.querySelector<HTMLElement>(`.panel[data-page="${id}"]`) : null;
-  const sheet = panel?.querySelector<HTMLElement>(".sheet");
-  const dock = panel?.querySelector<HTMLElement>(".dock");
-  if (!sheet || !dock) { composer.dockTo(null); return; }
-  const atBottom = sheet.scrollTop + sheet.clientHeight >= sheet.scrollHeight - 24;
-  composer.dockTo(atBottom ? dock : null);
-  // While idle there is nothing being aimed at yet; once open, setAim owns the
-  // placeholder, because it should describe what the question points at rather
-  // than where the pill happens to be sitting.
+  const sheet = id ? deckHost.querySelector<HTMLElement>(`.panel[data-page="${id}"] .sheet`) : null;
+  const lastPage = deck.count === 0 || deck.index === deck.count - 1;
+  // Read from scroll position and page index only — never from the composer's
+  // own height, which changes as a result of this decision and would oscillate.
+  const atBottom = !sheet || sheet.scrollTop + sheet.clientHeight >= sheet.scrollHeight - 24;
+  atSiteEnd = lastPage && atBottom;
+
+  deckHost.classList.toggle("atend", atSiteEnd);
+  composer.compact(!atSiteEnd && !aim);
   if (!aim) {
-    composer.placeholder(composer.docked
+    composer.placeholder(atSiteEnd
       ? "Ask a follow-up, or something new…"
       : "Ask about this page, or something new…");
   }
@@ -382,7 +396,9 @@ function currentAnchor(): Anchor | undefined {
   const id = deck.activeId;
   if (!id) return undefined;
   const doc = docFor(id);
-  if (!doc || composer.docked) return { page: id };
+  // At the end of the site there is no single block being looked at — the
+  // whole page is — so the question anchors to the page and nothing narrower.
+  if (!doc || atSiteEnd) return { page: id };
   const mid = deckHost.getBoundingClientRect().top + deckHost.clientHeight / 2;
   let best = -1, bestGap = Infinity;
   for (const [i, node] of [...doc.children].entries()) {

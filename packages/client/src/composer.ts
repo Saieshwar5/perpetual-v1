@@ -3,10 +3,16 @@
  *
  * There is no permanent input bar. A fixed footer costs 120px of every screen
  * and, worse, signals "this is a chat" — the one thing the whole product is
- * built to not be. So the composer is invoked, and it is a single element that
- * DOCKS at the end of a page and FLOATS when you are scrolled up. One
- * affordance, never two competing ones, and it belongs to the document rather
- * than hovering over the application.
+ * built to not be.
+ *
+ * So the composer is QUIET rather than absent. Mid-page it is a hairline that
+ * says where you are in the site and can be clicked; it becomes an input when
+ * there is a reason to — a block pointed at, a turn running, or the end of the
+ * last page, where the reader has genuinely run out of website.
+ *
+ * It used to have two homes, re-parented into a `.dock` element built into
+ * every page. One home now: the size is a class, so nothing is moved, nothing
+ * is blurred, and no page carries space for a composer that is not there.
  *
  * It also carries the turn while it runs. Three states:
  *
@@ -29,6 +35,7 @@ export class Composer {
   private invite: HTMLButtonElement;
   private aimEl: HTMLElement;
   private aimText: HTMLElement;
+  private posEl: HTMLElement;
   private verbEl: HTMLElement;
   private rawBtn: HTMLButtonElement;
   private rawEl: HTMLElement;
@@ -36,6 +43,7 @@ export class Composer {
   private outEl: HTMLElement;
   private statusEl: HTMLElement;
   private state: ComposerState = "idle";
+  private wantsCompact = true;
 
   onSubmit: (text: string) => void = () => {};
   onStop: () => void = () => {};
@@ -55,6 +63,7 @@ export class Composer {
     this.input = root.querySelector("input")!;
     this.aimEl = root.querySelector(".aim")!;
     this.aimText = root.querySelector(".aimtext")!;
+    this.posEl = root.querySelector(".pos")!;
     this.verbEl = root.querySelector(".verb")!;
     this.rawBtn = root.querySelector(".rawbtn")!;
     this.rawEl = root.querySelector(".raw")!;
@@ -102,8 +111,17 @@ export class Composer {
 
   get busy() { return this.state === "busy"; }
   get text() { return this.input.value; }
-  /** Docked means the reader is at the end of a page; floating means mid-page. */
-  get docked() { return this.root.classList.contains("docked"); }
+  /**
+   * Shrink to the hairline, or grow to the input.
+   *
+   * A request rather than a command: a running turn is always full, because it
+   * carries the activity, the stop button and the status, and a turn that ran
+   * invisibly would be worse than a composer that takes up room.
+   */
+  compact(yes: boolean) {
+    this.wantsCompact = yes;
+    this.paint();
+  }
 
   /**
    * What this question is pointing at, in words.
@@ -133,24 +151,21 @@ export class Composer {
   setHome(host: HTMLElement) {
     this.floatHost = host;
     if (this.root.parentElement !== host) host.append(this.root);
-    this.root.classList.remove("docked");
   }
 
   placeholder(text: string) { this.input.placeholder = text; }
 
-  clear() { this.input.value = ""; this.onType(""); }
-
   /**
-   * Move into a page's dock, or back to floating. Only ever while idle: moving
-   * a node blurs whatever is inside it, so re-docking mid-sentence would eat
-   * the reader's focus and their caret position.
+   * Where the reader is in the site.
+   *
+   * The hairline would otherwise be chrome asking to be noticed while saying
+   * nothing. This is the same count that used to sit in the rail's foot at
+   * 46px wide, where it was effectively invisible — one element doing two
+   * jobs, which is how the rest of this is built.
    */
-  dockTo(dock: HTMLElement | null) {
-    if (this.state !== "idle") return;
-    const target = dock ?? this.floatHost;
-    if (this.root.parentElement !== target) target.append(this.root);
-    this.root.classList.toggle("docked", Boolean(dock));
-  }
+  position(text: string) { this.posEl.textContent = text; }
+
+  clear() { this.input.value = ""; this.onType(""); }
 
   open() {
     if (this.state === "busy") return;
@@ -193,10 +208,7 @@ export class Composer {
     this.cmdEl.classList.remove("bad");
     this.rawEl.hidden = true;
     this.rawBtn.setAttribute("aria-expanded", "false");
-    if (this.root.parentElement !== this.floatHost) {
-      this.floatHost.append(this.root);
-      this.root.classList.remove("docked");
-    }
+    if (this.root.parentElement !== this.floatHost) this.floatHost.append(this.root);
     this.paint();
   }
 
@@ -260,5 +272,7 @@ export class Composer {
 
   private paint() {
     this.root.dataset.state = this.state;
+    // Full whenever there is something to do or say; hairline otherwise.
+    this.root.dataset.size = this.wantsCompact && this.state === "idle" ? "min" : "full";
   }
 }
