@@ -67,6 +67,54 @@ export interface Anchor {
   id?: string;
 }
 
+/**
+ * What the reader TOUCHED, rather than what they typed.
+ *
+ * The other half of the loop, and the thing the product was missing. Until now
+ * the only way anything reached the agent was a sentence: clicking a door
+ * called `composer.send(question)`, which sent the door's text as if it had
+ * been typed, and the server worked backwards — string-matching the ask
+ * against every door on every page — to guess that a button had been pressed.
+ *
+ * That guess is wrong in four ways. Typing a sentence that happens to match a
+ * door counts as clicking it. Two pages offering the same question collide,
+ * because the record was keyed on the text alone. The agent is never told a
+ * click happened at all. And nothing that is not a sentence — a file, a mail,
+ * an option — can be clickable, because a string is the only thing the channel
+ * carries.
+ *
+ * So a click travels as itself: which control, on which page, and which option
+ * — the agent's own token, handed back unchanged.
+ */
+export interface Selection {
+  /** The page the control is on. */
+  page: string;
+  /**
+   * Which control. `choice` blocks are required to carry an `id` precisely so
+   * this can name one; a door is named by its page and its question.
+   */
+  block?: string;
+  /** What kind of control it was. The agent is told different things about each. */
+  control: "choice" | "next";
+  /** The option's own id, or — for a door — the question itself. */
+  option: string;
+  /** What the reader saw on the thing they touched. */
+  label: string;
+  /** The question the control asked, when it asked one. */
+  prompt?: string;
+}
+
+/**
+ * The two records of what has been touched, keyed the same way on both sides.
+ *
+ * Defined here rather than in the client and the server separately, because a
+ * key that is computed in two places is a key that will eventually be computed
+ * two ways — which is exactly how doors ended up keyed on question text alone
+ * and colliding across pages.
+ */
+export const doorKey = (page: string, question: string) => `${page}\n${question}`;
+export const choiceKey = (page: string, block: string) => `${page}\n${block}`;
+
 export interface Problem {
   page: string;
   /** 1-based line in page.ndjson, when the problem is a line. */
@@ -103,4 +151,13 @@ export interface SessionIndex {
    * room it built, and the rest stay on the page as a record of the fork.
    */
   answered: Record<string, string>;
+  /**
+   * Choices already answered: `choiceKey(page, block)` -> the option's id.
+   *
+   * Separate from `answered` because they record different things. A door maps
+   * to the PAGE it built — that is what makes it a link afterwards. A choice
+   * maps to the OPTION that was picked, which usually builds nothing: it
+   * answers a question the agent could not proceed without.
+   */
+  chosen: Record<string, string>;
 }

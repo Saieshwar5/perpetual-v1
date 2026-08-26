@@ -52,7 +52,7 @@ const MAX_BLOCKS = 24;
 const TIER1_KINDS = new Set([
   "heading", "section", "prose", "quote", "list", "code", "note", "link", "next",
 ]);
-const TIER2_KINDS = new Set(["metrics", "chart", "table", "split", "flow"]);
+const TIER2_KINDS = new Set(["metrics", "chart", "table", "split", "flow", "choice"]);
 
 function tierOf(kind: string): Tier {
   if (TIER1_KINDS.has(kind)) return 1;

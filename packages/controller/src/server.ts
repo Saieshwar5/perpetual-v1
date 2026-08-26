@@ -19,6 +19,7 @@ import { SessionStore } from "./sessions.ts";
 import { readSite } from "./site.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
+import { choiceKey, doorKey, type Selection } from "@perpetual/shared/site";
 
 // Anchored to this module, never to process.cwd(): `pnpm dev` runs the server
 // from packages/controller, where a cwd-relative path silently resolves wrong.
@@ -95,15 +96,25 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
   const body = await new Promise<string>((r) => {
     let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b));
   });
-  const { input, anchor } = JSON.parse(body || "{}") as
-    { input?: string; anchor?: { page?: string; index?: number } };
+  const { input, anchor, selection } = JSON.parse(body || "{}") as
+    { input?: string; anchor?: { page?: string; index?: number; id?: string };
+      selection?: Selection };
   if (!input?.trim()) return json(res, 400, { error: "input required" });
 
   const index = await store.read(id);
   // What existed before the turn: needed to tell a NEW page from a rewritten
-  // one, and to look up the doors that were on offer when the reader clicked.
+  // one.
   const before = await readSite(store.siteDir(id));
   const existing = new Set(before.pages.map((p) => p.id));
+
+  // A click identifies itself, so nothing here has to be inferred. What the
+  // reader touched is recorded the moment the turn starts — a choice is
+  // answered whether or not the turn that followed produced anything, because
+  // the reader answered it either way.
+  if (selection?.control === "choice" && selection.block) {
+    index.chosen[choiceKey(selection.page, selection.block)] = selection.option;
+    await store.write(index);
+  }
 
   inFlight.add(id);
   res.writeHead(200, {
@@ -123,8 +134,13 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
     sandbox: sandboxFor(id),
     pastAsks: index.asks,
     ...(anchor?.page ? {
-      anchor: { page: anchor.page, ...(typeof anchor.index === "number" ? { index: anchor.index } : {}) },
+      anchor: {
+        page: anchor.page,
+        ...(typeof anchor.index === "number" ? { index: anchor.index } : {}),
+        ...(anchor.id ? { id: anchor.id } : {}),
+      },
     } : {}),
+    ...(selection?.page && selection.option ? { selection } : {}),
     signal: ac.signal,
     ...(process.env.PERPETUAL_EFFORT ? { effort: process.env.PERPETUAL_EFFORT as never } : {}),
   });
@@ -138,11 +154,16 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
     // A door spends only when a branch was actually TAKEN. If the turn amended
     // a page instead of writing one, no fork happened and the siblings stay
     // open — a click that went nowhere should not close anything off.
+    //
+    // Which door, though, used to be a GUESS: the ask was string-matched
+    // against every door on every page, so typing a sentence that happened to
+    // match one counted as clicking it, and two pages offering the same
+    // question shared one record. The click now says which door it was, on
+    // which page, so there is nothing left to match.
     const created = site.pages.map((p) => p.id).filter((pid) => !existing.has(pid));
-    const wasADoor = before.pages.some(
-      (p) => p.blocks.some((b) => b.kind === "next" && b.items.includes(input)),
-    );
-    if (wasADoor && created[0]) index.answered[input] = created[0];
+    if (selection?.control === "next" && created[0]) {
+      index.answered[doorKey(selection.page, selection.option)] = created[0];
+    }
 
     index.asks.push(input);
     index.pageCount = site.pages.length;
@@ -154,7 +175,10 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
       at: new Date().toISOString(), ask: input,
       touched: s.touched, commands: s.commands, steps: s.steps, stopped: s.stopped,
     });
-    send({ type: "turn_saved", pages: site.pages.length, answered: index.answered });
+    send({
+      type: "turn_saved", pages: site.pages.length,
+      answered: index.answered, chosen: index.chosen,
+    });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     send({ type: "error", message });

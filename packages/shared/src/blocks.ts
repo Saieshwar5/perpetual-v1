@@ -85,6 +85,38 @@ export interface Link extends BlockBase { kind: "link"; page: string; text?: str
 export interface Next extends BlockBase { kind: "next"; items: string[] }
 
 /**
+ * A question the agent asks the reader, answered by TOUCH.
+ *
+ * The other half of the loop. Everything the agent says is structured — one
+ * validated object per line — and everything the reader said back was a
+ * sentence, which the agent then had to parse to find out which of the three
+ * files it had just listed was meant. `choice` removes the parsing: the agent
+ * writes the options and gets back the `id` it wrote itself. The ambiguity is
+ * gone by construction rather than by prompting.
+ *
+ * Not the same thing as `next`, and the difference is worth keeping:
+ *
+ *   `next`   — questions the PAGE raises. Taking one forks the site: a new
+ *              page gets written, and the siblings become the record of it.
+ *   `choice` — a question the AGENT raises because it cannot proceed without
+ *              an answer. Taking one usually continues the work in place.
+ *
+ * They share the channel (a Selection) and nothing else.
+ */
+export interface Choice extends BlockBase {
+  kind: "choice";
+  /** What is being asked. One line: "Which report did you mean?" */
+  prompt: string;
+  options: {
+    /** The agent's own token. It comes back verbatim; it never has to be parsed. */
+    id: string;
+    label: string;
+    /** The line under the label — the metadata a person actually decides by. */
+    hint?: string;
+  }[];
+}
+
+/**
  * A drawing. Tier 3. plans/16 §3.
  *
  * The agent writes `src` — an SVG file beside page.ndjson — and never `svg`.
@@ -104,13 +136,13 @@ export interface Figure extends BlockBase {
 
 export type Block =
   | Heading | Section | Prose | Quote | List | Metrics | Chart
-  | Table | Split | Flow | Code | Note | Link | Figure | Next;
+  | Table | Split | Flow | Code | Note | Link | Figure | Next | Choice;
 
 export type BlockKind = Block["kind"];
 
 export const BLOCK_KINDS: readonly BlockKind[] = [
   "heading", "section", "prose", "quote", "list", "metrics", "chart",
-  "table", "split", "flow", "code", "note", "link", "figure", "next",
+  "table", "split", "flow", "code", "note", "link", "figure", "next", "choice",
 ];
 
 export type Valid<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -221,6 +253,13 @@ export function textFields(b: Block): { where: string; text: string; honoured: b
       // the reader as punctuation inside a button.
       b.items.forEach((t, i) => out.push({ where: `items[${i}]`, text: t, honoured: false }));
       break;
+    case "choice":
+      out.push({ where: "prompt", text: b.prompt, honoured: false });
+      b.options.forEach((o, i) => {
+        out.push({ where: `options[${i}].label`, text: o.label, honoured: false });
+        if (o.hint) out.push({ where: `options[${i}].hint`, text: o.hint, honoured: false });
+      });
+      break;
     case "split":
       b.panels.forEach((pn, i) => {
         out.push({ where: `panels[${i}].title`, text: pn.title, honoured: false });
@@ -305,12 +344,57 @@ export function validateBlock(v: unknown): Valid<Block> {
       if (!Array.isArray(v.items) || v.items.length < 1 || v.items.length > 5) {
         return bad("`items` must hold 1 to 5 questions (two or three is usually right)");
       }
+      const asked = new Set<string>();
       for (const [i, q] of v.items.entries()) {
         if (!str(q)) return bad(`items[${i}] is empty`);
+        if (asked.has(q as string)) {
+          return bad(`items[${i}] repeats the question on items[${[...asked].indexOf(q as string)}]. ` +
+            "A door is identified by its question, so two identical ones are one door " +
+            "the reader can click twice.");
+        }
+        asked.add(q as string);
         if ((q as string).length > 160) {
           return bad(`items[${i}] is ${(q as string).length} characters. Each one is a ` +
             "question the reader will click, not a paragraph — keep it to a line.");
         }
+      }
+      break;
+    }
+
+    case "choice": {
+      // The only block that REQUIRES a name. When the reader picks an option,
+      // the answer has to say which control it came from — and a position
+      // cannot say that: it changes the moment anything above it does.
+      if (!str(v.id)) {
+        return bad("needs an `id`. It is the one block the reader answers, so it has " +
+          'to have a name the answer can carry: {"kind":"choice","id":"which-report",…}');
+      }
+      if (!str(v.prompt)) {
+        return bad("`prompt` must say what is being asked, in one line — " +
+          '"Which report did you mean?"');
+      }
+      if (!Array.isArray(v.options) || v.options.length < 2 || v.options.length > 8) {
+        // One option is not a choice, and nine is a search problem: the reader
+        // cannot hold nine things in mind, so a long list wants narrowing
+        // first — which is what the prompt is for.
+        return bad("`options` must hold 2 to 8 entries. One is not a choice; more than " +
+          "eight is a list the reader has to search, so narrow it first.");
+      }
+      const seen = new Set<string>();
+      for (const [i, o] of v.options.entries()) {
+        if (!isRec(o)) return bad(`options[${i}] is not an object`);
+        if (!str(o.id) || !ID_RE.test(o.id as string)) {
+          return bad(`options[${i}].id must be a short name — lowercase letters, digits ` +
+            "and dashes. It is what comes back when the reader picks this one, so you " +
+            "never have to work out which option they meant.");
+        }
+        if (seen.has(o.id as string)) {
+          return bad(`options[${i}].id "${o.id}" is used twice. Two options that answer ` +
+            "to the same name cannot be told apart.");
+        }
+        seen.add(o.id as string);
+        if (!str(o.label)) return bad(`options[${i}].label is missing (what the reader reads)`);
+        if (o.hint != null && !str(o.hint)) return bad(`options[${i}].hint is empty — omit it instead`);
       }
       break;
     }

@@ -28,7 +28,7 @@ import { SiteWatcher } from "./watcher.ts";
 import { readSite } from "./site.ts";
 import { systemPrompt, turnMessage, NUDGE } from "./context.ts";
 import type { Runtime, Effort } from "./runtime.ts";
-import type { Anchor } from "@perpetual/shared/site";
+import type { Anchor, Selection } from "@perpetual/shared/site";
 import type { StopCause, TurnEvent } from "@perpetual/shared/events";
 
 /**
@@ -51,6 +51,8 @@ export interface TurnOptions {
   pastAsks: string[];
   /** Where in the site the question was asked from, if anywhere. */
   anchor?: Anchor;
+  /** What the reader TOUCHED, when the turn began with a click rather than a sentence. */
+  selection?: Selection;
   effort?: Effort;
   signal?: AbortSignal;
 }
@@ -140,6 +142,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
       convo.user(turnMessage({
         ask: o.ask, site, pastAsks: o.pastAsks,
         ...(o.anchor ? { anchor: o.anchor } : {}),
+        ...(o.selection ? { selection: o.selection } : {}),
       }));
 
       let nudged = false;
