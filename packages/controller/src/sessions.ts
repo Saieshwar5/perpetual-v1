@@ -147,6 +147,32 @@ export class SessionStore {
     return removed;
   }
 
+  /**
+   * How much disk this session is holding.
+   *
+   * The sweep only removes sessions that were never used, so anything the
+   * reader actually looked at stays forever — and the agent writes freely into
+   * `workspace/`. Nothing measured it, so nothing could notice a session that
+   * had grown by a gigabyte.
+   *
+   * Walked rather than tracked: a running total would have to be kept correct
+   * against a directory the agent can write to with any command it likes,
+   * which is a promise this cannot keep. A walk over a few hundred files costs
+   * a millisecond and is always right.
+   */
+  async size(id: string): Promise<number> {
+    let total = 0;
+    try {
+      const names = await readdir(this.dir(id), { recursive: true, withFileTypes: true });
+      for (const e of names) {
+        if (!e.isFile()) continue;
+        total += await stat(join(e.parentPath, e.name))
+          .then((s) => s.size).catch(() => 0);
+      }
+    } catch { /* a session that is gone holds nothing */ }
+    return total;
+  }
+
   async log(id: string, entry: Record<string, unknown>) {
     await appendFile(
       join(this.dir(id), "log.jsonl"),

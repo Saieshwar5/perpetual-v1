@@ -25,7 +25,7 @@
  */
 import { spawn } from "node:child_process";
 import { OutputAccumulator, formatResult, type Captured } from "./output.ts";
-import { wrapCommand, mountPath, toolsDir, type SandboxConfig } from "./sandbox.ts";
+import { wrapCommand, mountPath, toolsDir, ulimits, type SandboxConfig } from "./sandbox.ts";
 
 export const DEFAULT_TIMEOUT_SEC = 120;
 const MAX_TIMEOUT_SEC = 600;
@@ -62,9 +62,13 @@ const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
  * own ordering (one pipe, no reordering races), the command's exit code
  * survives the trailing marker, and $PWD comes back last.
  */
-export function script(command: string, cwd: string, fallback: string): string {
+export function script(
+  command: string, cwd: string, fallback: string, prologue = "",
+): string {
   return [
     "exec 2>&1",
+    // Resource limits first, so they bind everything the command starts.
+    ...(prologue ? [prologue] : []),
     `cd ${q(cwd)} 2>/dev/null || cd ${q(fallback)}`,
     "{",
     command,
@@ -83,7 +87,9 @@ export function createShell(cfg: SandboxConfig) {
     const started = Date.now();
     const timeoutSec = Math.min(Math.max(1, req.timeoutSec ?? DEFAULT_TIMEOUT_SEC), MAX_TIMEOUT_SEC);
     const acc = new OutputAccumulator();
-    const { file, args } = wrapCommand(script(req.command, req.cwd ?? cwd, home), cfg);
+    const { file, args } = wrapCommand(
+      script(req.command, req.cwd ?? cwd, home, ulimits(cfg)), cfg,
+    );
 
     const child = spawn(file, args, {
       detached: true,                     // own process group — see (3) above
