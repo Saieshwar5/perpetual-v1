@@ -146,7 +146,7 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
     let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b));
   });
   const { input, anchor, selection } = JSON.parse(body || "{}") as
-    { input?: string; anchor?: { page?: string; index?: number; id?: string };
+    { input?: string; anchor?: { page?: string; index?: number; id?: string; quote?: string };
       selection?: Selection };
   if (!input?.trim()) return json(res, 400, { error: "input required" });
 
@@ -195,6 +195,8 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
         page: anchor.page,
         ...(typeof anchor.index === "number" ? { index: anchor.index } : {}),
         ...(anchor.id ? { id: anchor.id } : {}),
+        ...(typeof anchor.quote === "string" && anchor.quote.trim()
+          ? { quote: anchor.quote.slice(0, 400) } : {}),
       },
     } : {}),
     ...(selection?.page && selection.option ? { selection } : {}),

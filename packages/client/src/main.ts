@@ -34,7 +34,6 @@ const grid = $("grid");
 const deckHost = $("deck");
 const railHost = $("rail");
 const titleEl = $("stitle");
-const countEl = $("scount");
 
 const deck = new Deck(deckHost);
 const rail = new Rail(railHost, $("railmid"));
@@ -129,16 +128,13 @@ function makePanel(page: Page) {
   // The layout modes are the whole of "layout freedom" (plans/16 §7): four
   // compositions we style, rather than a stylesheet the agent writes.
   doc.className = `doc lay-${page.layout ?? "column"}`;
-  // Where the composer lands when the reader reaches the end of this page.
-  const dock = document.createElement("div");
-  dock.className = "dock";
-  sheet.append(doc, dock);
+  sheet.append(doc);
   root.append(sheet);
   const acts = actionsFor(page.id);
   for (const b of page.blocks) appendBlock(doc, b, acts);
   sheet.addEventListener("scroll", () => { if (page.id === deck.activeId) placeComposer(); },
     { passive: true });
-  return { root, sheet, doc, dock };
+  return { root, sheet, doc };
 }
 
 function addPage(page: Page, opts: { goto?: boolean } = {}) {
@@ -228,12 +224,12 @@ function refit() {
 function paintRail() {
   rail.set(pages.map((p) => ({ id: p.id, ask: p.ask ?? "", title: p.title })));
   rail.setActive(deck.index);
-  countEl.textContent = pages.length ? `${deck.index + 1} / ${pages.length}` : "";
+  composer.position(pages.length ? `${deck.index + 1} / ${pages.length}` : "");
 }
 
 deck.onChange = (i, id) => {
   rail.setActive(i);
-  countEl.textContent = pages.length ? `${i + 1} / ${pages.length}` : "";
+  composer.position(pages.length ? `${i + 1} / ${pages.length}` : "");
   // Moving to another page drops the aim. A block the reader has scrolled past
   // is a reminder they can go back to; one on a page they have LEFT is a claim
   // about something they are no longer looking at.
@@ -242,23 +238,41 @@ deck.onChange = (i, id) => {
 };
 
 /**
- * Dock the composer at the end of the current page, or float it. The test is
- * the same "am I at the bottom" that force-scroll already computes, so a page
- * short enough not to scroll is always docked — which is correct.
+ * Is the reader out of website?
+ *
+ * The composer used to inflate at the bottom of EVERY page, and that was the
+ * wrong moment: the bottom of page 3 of 6 does not mean "you are finished, ask
+ * something" — it means "keep going, there is more", and the gesture that
+ * belongs there is the force-scroll to page 4. Interrupting it with a full
+ * input box argues against the one movement the product is built around.
+ *
+ * The bottom of the LAST page is different. There is nothing left to scroll
+ * to, so asking is honestly the next step.
+ */
+let atSiteEnd = false;
+
+/**
+ * Size the composer for where the reader is.
+ *
+ * There is one composer and one home. It used to be re-parented into a `.dock`
+ * built into every page — N docks for one composer, 26vh of reserved space at
+ * the end of each of them, and a re-parent that blurred whatever was focused
+ * (which is why docking had to be blocked whenever the reader was mid-sentence).
+ * All of that is now a class on one element.
  */
 function placeComposer() {
   const id = deck.activeId;
-  const panel = id ? deckHost.querySelector<HTMLElement>(`.panel[data-page="${id}"]`) : null;
-  const sheet = panel?.querySelector<HTMLElement>(".sheet");
-  const dock = panel?.querySelector<HTMLElement>(".dock");
-  if (!sheet || !dock) { composer.dockTo(null); return; }
-  const atBottom = sheet.scrollTop + sheet.clientHeight >= sheet.scrollHeight - 24;
-  composer.dockTo(atBottom ? dock : null);
-  // While idle there is nothing being aimed at yet; once open, setAim owns the
-  // placeholder, because it should describe what the question points at rather
-  // than where the pill happens to be sitting.
+  const sheet = id ? deckHost.querySelector<HTMLElement>(`.panel[data-page="${id}"] .sheet`) : null;
+  const lastPage = deck.count === 0 || deck.index === deck.count - 1;
+  // Read from scroll position and page index only — never from the composer's
+  // own height, which changes as a result of this decision and would oscillate.
+  const atBottom = !sheet || sheet.scrollTop + sheet.clientHeight >= sheet.scrollHeight - 24;
+  atSiteEnd = lastPage && atBottom;
+
+  deckHost.classList.toggle("atend", atSiteEnd);
+  composer.compact(!atSiteEnd && !aim);
   if (!aim) {
-    composer.placeholder(composer.docked
+    composer.placeholder(atSiteEnd
       ? "Ask a follow-up, or something new…"
       : "Ask about this page, or something new…");
   }
@@ -281,12 +295,25 @@ const AIM_LABEL: Record<string, string> = {
  * being shown and being sent would be worse than no value at all.
  */
 let aim: Anchor | undefined;
+/**
+ * Did the READER point at this, or did the app guess it?
+ *
+ * Opening the composer takes a guess — the block nearest the middle of the
+ * view — so that "make that shorter" means something without anyone having to
+ * click first. That guess must never be treated as a decision. Clicking the
+ * block you are pointing at undoes it, and without this flag the FIRST click
+ * on the middle block undid an aim the reader had never made: open, guess that
+ * block, then read the click that caused the open as "undo". The block in the
+ * middle of the screen was unselectable, and no other block was.
+ */
+let aimChosen = false;
 
 function clearAim() {
   for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
   aimWatch?.disconnect();
   aimWatch = undefined;
   aim = undefined;
+  aimChosen = false;
   composer.aim(null);
 }
 
@@ -308,17 +335,18 @@ function reaim() {
   const page = pages.find((p) => p.id === aim!.page);
   if (!page) { setAim(undefined); return; }
 
+  const chosen = aimChosen;                         // survives the re-set below
   if (aim.id) {
     const now = page.blocks.findIndex((b) => b.id === aim!.id);
     if (now === -1) { setAim({ page: aim.page }); return; }
-    if (now !== aim.index) setAim({ ...aim, index: now });
-    else setAim(aim);                               // repaint: the node may be new
+    if (now !== aim.index) setAim({ ...aim, index: now }, chosen);
+    else setAim(aim, chosen);                       // repaint: the node may be new
     return;
   }
   // Unnamed: the index may still be right, but nothing can prove it. Keep it
   // only while it points at a block of the same kind — otherwise let it go.
   const still = page.blocks[aim.index];
-  setAim(still ? aim : { page: aim.page });
+  setAim(still ? aim : { page: aim.page }, still ? chosen : false);
 }
 
 /**
@@ -356,16 +384,22 @@ function paintAim(offScreen = false) {
     composer.placeholder("Ask a follow-up, or something new…");
     return;
   }
-  const what = AIM_LABEL[block.kind] ?? "this";
+  // The reader's own words beat a category: "about this paragraph" is true of
+  // five sentences at once, and they picked one.
+  const what = a.quote
+    ? `“${a.quote.length > 52 ? `${a.quote.slice(0, 51)}…` : a.quote}”`
+    : AIM_LABEL[block.kind] ?? "this";
   composer.aim(offScreen ? `about ${what}, further up ↑` : `about ${what}`, { faded: offScreen });
   composer.placeholder("Change this, or ask about it…");
 }
 
-function setAim(a: Anchor | undefined) {
+function setAim(a: Anchor | undefined, chosen = false) {
   for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
   aimWatch?.disconnect();
   aimWatch = undefined;
   aim = a;
+  // Only a block the reader indicated is theirs to undo.
+  aimChosen = chosen && a?.index != null;
   const node = a?.index != null ? docFor(a.page)?.children[a.index] : undefined;
   if (node) { node.classList.add("anchored"); watchAim(node); }
   paintAim();
@@ -382,7 +416,9 @@ function currentAnchor(): Anchor | undefined {
   const id = deck.activeId;
   if (!id) return undefined;
   const doc = docFor(id);
-  if (!doc || composer.docked) return { page: id };
+  // At the end of the site there is no single block being looked at — the
+  // whole page is — so the question anchors to the page and nothing narrower.
+  if (!doc || atSiteEnd) return { page: id };
   const mid = deckHost.getBoundingClientRect().top + deckHost.clientHeight / 2;
   let best = -1, bestGap = Infinity;
   for (const [i, node] of [...doc.children].entries()) {
@@ -422,6 +458,9 @@ async function showLibrary(opts: { focus?: boolean } = {}) {
   // The composer comes with us. On this view it is the primary action, so it
   // opens rather than waiting to be invoked.
   composer.setHome(libHost);
+  // Never short here: on the library there is no page to be quiet about, and
+  // asking is the only thing to do.
+  composer.compact(false);
   composer.placeholder("Ask anything — or type to find an earlier session");
   composer.clear();
   if (opts.focus !== false) composer.open();
@@ -811,25 +850,111 @@ composer.onUnaim = () => {
 
 // Point at something else. Implicit aim is a guess; a click is a decision,
 // and it is how you say "that row", not "that page".
-deckHost.addEventListener("click", (e) => {
+/** As much of a quote as is worth carrying: enough to be exact, not a page. */
+const MAX_QUOTE = 400;
+
+/**
+ * Which block the reader just indicated, and the words if they highlighted any.
+ *
+ * THE BUG THIS REPLACES. A `click` fires on the nearest common ancestor of
+ * where the mouse went down and where it came up. Press inside a paragraph and
+ * release in the 1.15rem gap below it — which is what happens whenever anyone
+ * overshoots the end of a sentence they are selecting — and the target is the
+ * `.doc` itself. `.doc` is not a child of `.doc`, so `closest('.doc > *')`
+ * returned null and the handler gave up in silence: the text was selected, and
+ * nothing pointed at anything.
+ *
+ * So the block is found three ways, in order of what the reader meant:
+ *
+ *   1. WHERE THE SELECTION STARTED. `anchorNode` is where the drag began, so
+ *      an overshoot cannot lose it — and a selection spanning two blocks
+ *      anchors to the first while keeping the whole quote.
+ *   2. What was clicked, for a plain click with no selection.
+ *   3. The nearest block by distance, when the point landed in the gap between
+ *      two of them. Somebody clicking in the space under a paragraph means
+ *      that paragraph, not nothing.
+ */
+function pointedAt(e: MouseEvent): { node: HTMLElement; doc: HTMLElement; quote: string } | null {
+  const target = e.target as HTMLElement;
+  const sel = window.getSelection();
+  const selected = sel && !sel.isCollapsed ? sel.toString().trim() : "";
+
+  const from = selected && sel?.anchorNode
+    ? (sel.anchorNode.nodeType === 1
+        ? sel.anchorNode as HTMLElement
+        : sel.anchorNode.parentElement)
+    : target;
+
+  let node = from?.closest<HTMLElement>(".doc > *") ?? null;
+
+  if (!node) {
+    // In the gap between blocks: the closest one vertically is the one meant.
+    const doc = (target.closest<HTMLElement>(".doc")
+      ?? from?.closest<HTMLElement>(".doc")) ?? null;
+    if (!doc) return null;
+    let best: HTMLElement | null = null;
+    let gap = Infinity;
+    for (const child of doc.children) {
+      if (!(child instanceof HTMLElement)) continue;
+      const r = child.getBoundingClientRect();
+      const d = e.clientY < r.top ? r.top - e.clientY
+        : e.clientY > r.bottom ? e.clientY - r.bottom : 0;
+      if (d < gap) { gap = d; best = child; }
+    }
+    node = best;
+  }
+
+  const doc = node?.parentElement ?? null;
+  if (!node || !doc) return null;
+
+  // Trim the quote to the block it belongs to. Overshooting the end of a
+  // sentence is now harmless rather than fatal, which means it will happen all
+  // the time — and a quote that runs on into the next block's chart labels is
+  // noise arriving as if it were the reader's aim.
+  let quote = selected;
+  if (quote && sel?.rangeCount) {
+    try {
+      const r = sel.getRangeAt(0).cloneRange();
+      if (!node.contains(r.startContainer)) r.setStartBefore(node);
+      if (!node.contains(r.endContainer)) r.setEndAfter(node);
+      quote = r.toString().trim();
+    } catch { /* a range we cannot clamp is better sent whole than dropped */ }
+  }
+  return { node, doc, quote: quote.slice(0, MAX_QUOTE) };
+}
+
+// `mouseup` rather than `click`: a click's target is a compromise between two
+// points, and the selection is only settled once the button comes up.
+deckHost.addEventListener("mouseup", (e) => {
   if (composer.busy || !sessionId) return;
   const target = e.target as HTMLElement;
   if (target.closest("button")) return;             // links and figures keep their own clicks
-  const node = target.closest<HTMLElement>(".doc > *");
-  const doc = node?.parentElement;
-  const id = doc?.closest<HTMLElement>(".panel")?.dataset.page;
-  if (!node || !doc || !id) return;
+  const found = pointedAt(e);
+  if (!found) return;
+  const { node, doc, quote } = found;
+  const id = doc.closest<HTMLElement>(".panel")?.dataset.page;
+  if (!id) return;
   // Open FIRST: opening recomputes the implicit aim, and it would otherwise
   // land on top of the one the reader just chose.
   composer.open();
   const index = [...doc.children].indexOf(node);
   // Clicking the block you are already pointing at stops pointing at it — the
-  // gesture undoes itself, which is the one people try first.
-  if (aim?.page === id && aim.index === index) { composer.onUnaim(); return; }
+  // gesture undoes itself, which is the one people try first. Only if the
+  // reader CHOSE it, though: `composer.open()` above has just guessed at the
+  // block nearest the middle of the view, and undoing a guess nobody made is
+  // how the middle of the screen became unclickable. Selecting words inside it
+  // is not the undo gesture either: it is a narrower aim.
+  if (!quote && aimChosen && aim?.page === id && aim.index === index) {
+    composer.onUnaim(); return;
+  }
   // The name, when the block has one, is what keeps this pointing at the thing
   // the reader chose even if the agent rearranges the page while they type.
   const blockId = node.dataset.blockId;
-  setAim({ page: id, index, ...(blockId ? { id: blockId } : {}) });
+  setAim({
+    page: id, index,
+    ...(blockId ? { id: blockId } : {}),
+    ...(quote ? { quote } : {}),
+  }, true);
 });
 
 composer.onType = (text) => { if (!sessionId) { filter = text; paintLibrary(); } };

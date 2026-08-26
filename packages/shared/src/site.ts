@@ -65,6 +65,15 @@ export interface Anchor {
    * may already have moved.
    */
   id?: string;
+  /**
+   * The words the reader had selected, when they selected any.
+   *
+   * A block is a coarse referent: "about this paragraph" is true of five
+   * sentences at once. When the reader highlights a phrase they have said
+   * something much more precise, and the agent WROTE that phrase — so quoting
+   * it back is an exact reference with nothing left to interpret.
+   */
+  quote?: string;
 }
 
 /**
