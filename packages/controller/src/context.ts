@@ -196,6 +196,14 @@ export function turnMessage(
       parts.push(
         `\nThe user is asking from **${page.id}** ("${page.title}")` +
         (at ? `, looking at ${describeBlock(at)}` : "") +
+        // The words beat the block. A paragraph is five sentences; a highlight
+        // is one phrase, and it is a phrase THIS AGENT WROTE — so quoting it
+        // back is an exact referent with nothing left to interpret. Without
+        // it, "is this right?" about a highlighted number arrives as a
+        // question about the whole paragraph.
+        (opts.anchor.quote
+          ? `.\nThey have highlighted, inside it:\n\n> ${opts.anchor.quote}\n\nTreat that as what "this" refers to`
+          : "") +
         ". If they are correcting or refining that page, rewrite it in place." +
         (at?.id
           ? ` That block is named \`${at.id}\` — if the fix is confined to it, rewrite ` +

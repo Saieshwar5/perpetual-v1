@@ -370,7 +370,11 @@ function paintAim(offScreen = false) {
     composer.placeholder("Ask a follow-up, or something new…");
     return;
   }
-  const what = AIM_LABEL[block.kind] ?? "this";
+  // The reader's own words beat a category: "about this paragraph" is true of
+  // five sentences at once, and they picked one.
+  const what = a.quote
+    ? `“${a.quote.length > 52 ? `${a.quote.slice(0, 51)}…` : a.quote}”`
+    : AIM_LABEL[block.kind] ?? "this";
   composer.aim(offScreen ? `about ${what}, further up ↑` : `about ${what}`, { faded: offScreen });
   composer.placeholder("Change this, or ask about it…");
 }
@@ -830,25 +834,106 @@ composer.onUnaim = () => {
 
 // Point at something else. Implicit aim is a guess; a click is a decision,
 // and it is how you say "that row", not "that page".
-deckHost.addEventListener("click", (e) => {
+/** As much of a quote as is worth carrying: enough to be exact, not a page. */
+const MAX_QUOTE = 400;
+
+/**
+ * Which block the reader just indicated, and the words if they highlighted any.
+ *
+ * THE BUG THIS REPLACES. A `click` fires on the nearest common ancestor of
+ * where the mouse went down and where it came up. Press inside a paragraph and
+ * release in the 1.15rem gap below it — which is what happens whenever anyone
+ * overshoots the end of a sentence they are selecting — and the target is the
+ * `.doc` itself. `.doc` is not a child of `.doc`, so `closest('.doc > *')`
+ * returned null and the handler gave up in silence: the text was selected, and
+ * nothing pointed at anything.
+ *
+ * So the block is found three ways, in order of what the reader meant:
+ *
+ *   1. WHERE THE SELECTION STARTED. `anchorNode` is where the drag began, so
+ *      an overshoot cannot lose it — and a selection spanning two blocks
+ *      anchors to the first while keeping the whole quote.
+ *   2. What was clicked, for a plain click with no selection.
+ *   3. The nearest block by distance, when the point landed in the gap between
+ *      two of them. Somebody clicking in the space under a paragraph means
+ *      that paragraph, not nothing.
+ */
+function pointedAt(e: MouseEvent): { node: HTMLElement; doc: HTMLElement; quote: string } | null {
+  const target = e.target as HTMLElement;
+  const sel = window.getSelection();
+  const selected = sel && !sel.isCollapsed ? sel.toString().trim() : "";
+
+  const from = selected && sel?.anchorNode
+    ? (sel.anchorNode.nodeType === 1
+        ? sel.anchorNode as HTMLElement
+        : sel.anchorNode.parentElement)
+    : target;
+
+  let node = from?.closest<HTMLElement>(".doc > *") ?? null;
+
+  if (!node) {
+    // In the gap between blocks: the closest one vertically is the one meant.
+    const doc = (target.closest<HTMLElement>(".doc")
+      ?? from?.closest<HTMLElement>(".doc")) ?? null;
+    if (!doc) return null;
+    let best: HTMLElement | null = null;
+    let gap = Infinity;
+    for (const child of doc.children) {
+      if (!(child instanceof HTMLElement)) continue;
+      const r = child.getBoundingClientRect();
+      const d = e.clientY < r.top ? r.top - e.clientY
+        : e.clientY > r.bottom ? e.clientY - r.bottom : 0;
+      if (d < gap) { gap = d; best = child; }
+    }
+    node = best;
+  }
+
+  const doc = node?.parentElement ?? null;
+  if (!node || !doc) return null;
+
+  // Trim the quote to the block it belongs to. Overshooting the end of a
+  // sentence is now harmless rather than fatal, which means it will happen all
+  // the time — and a quote that runs on into the next block's chart labels is
+  // noise arriving as if it were the reader's aim.
+  let quote = selected;
+  if (quote && sel?.rangeCount) {
+    try {
+      const r = sel.getRangeAt(0).cloneRange();
+      if (!node.contains(r.startContainer)) r.setStartBefore(node);
+      if (!node.contains(r.endContainer)) r.setEndAfter(node);
+      quote = r.toString().trim();
+    } catch { /* a range we cannot clamp is better sent whole than dropped */ }
+  }
+  return { node, doc, quote: quote.slice(0, MAX_QUOTE) };
+}
+
+// `mouseup` rather than `click`: a click's target is a compromise between two
+// points, and the selection is only settled once the button comes up.
+deckHost.addEventListener("mouseup", (e) => {
   if (composer.busy || !sessionId) return;
   const target = e.target as HTMLElement;
   if (target.closest("button")) return;             // links and figures keep their own clicks
-  const node = target.closest<HTMLElement>(".doc > *");
-  const doc = node?.parentElement;
-  const id = doc?.closest<HTMLElement>(".panel")?.dataset.page;
-  if (!node || !doc || !id) return;
+  const found = pointedAt(e);
+  if (!found) return;
+  const { node, doc, quote } = found;
+  const id = doc.closest<HTMLElement>(".panel")?.dataset.page;
+  if (!id) return;
   // Open FIRST: opening recomputes the implicit aim, and it would otherwise
   // land on top of the one the reader just chose.
   composer.open();
   const index = [...doc.children].indexOf(node);
   // Clicking the block you are already pointing at stops pointing at it — the
-  // gesture undoes itself, which is the one people try first.
-  if (aim?.page === id && aim.index === index) { composer.onUnaim(); return; }
+  // gesture undoes itself, which is the one people try first. Selecting words
+  // inside it is not that gesture: it is a narrower aim, not an undo.
+  if (!quote && aim?.page === id && aim.index === index) { composer.onUnaim(); return; }
   // The name, when the block has one, is what keeps this pointing at the thing
   // the reader chose even if the agent rearranges the page while they type.
   const blockId = node.dataset.blockId;
-  setAim({ page: id, index, ...(blockId ? { id: blockId } : {}) });
+  setAim({
+    page: id, index,
+    ...(blockId ? { id: blockId } : {}),
+    ...(quote ? { quote } : {}),
+  });
 });
 
 composer.onType = (text) => { if (!sessionId) { filter = text; paintLibrary(); } };
