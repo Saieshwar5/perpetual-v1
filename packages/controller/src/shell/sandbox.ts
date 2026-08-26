@@ -77,6 +77,48 @@ export function sandboxEnv(mount: string): Record<string, string> {
   };
 }
 
+/**
+ * What the command may USE, as opposed to what it may see.
+ *
+ * The namespaces contain reach: the agent cannot see a home directory, and
+ * `~/.ssh` does not exist rather than being protected. They contain nothing
+ * about consumption. Asked directly, the sandboxed shell reported `file size
+ * unlimited`, `virtual memory unlimited`, `max user processes 30040` — and
+ * wrote a 40MB file into the session without complaint. A runaway loop, a
+ * mistyped `dd`, or a fork bomb could fill the disk or the machine, and this
+ * runs model-authored code on a personal computer.
+ *
+ * bwrap has no rlimit flags, which is probably why this was missed. bash's own
+ * `ulimit` does the job, applies to the whole process tree, and needs no extra
+ * binary in the sandbox.
+ *
+ * Every value below was chosen by trying it, not by reasoning:
+ *
+ *   -f  128MB per file. A figure is kilobytes and a page is smaller; anything
+ *       approaching this is a mistake, and `dd` stops at the limit rather than
+ *       filling the disk. (bash counts -f in 1024-byte blocks — verified.)
+ *   -u  256 processes, and ONLY when sandboxed. RLIMIT_NPROC counts against
+ *       the real user, so in unsafe mode this would count the host's existing
+ *       processes and could stop the machine forking at all. bwrap's user
+ *       namespace resets the count, which is why it is safe there — checked by
+ *       running a loop of forks under `ulimit -u 64` inside the sandbox.
+ *   -v  4GB of address space. python3 and a real figure job run fine under it;
+ *       node is not in the sandbox's PATH at all, which is the tool that would
+ *       most likely object.
+ *   -c  no core dumps: a crashing process should not leave a GB in the session.
+ *
+ * RSS is deliberately absent — Linux ignores RLIMIT_RSS, so a true memory cap
+ * needs cgroups (systemd-run), which is a bigger dependency than this is worth
+ * today.
+ */
+export function ulimits(cfg: SandboxConfig): string {
+  const parts = ["-c 0", "-f 131072", "-v 4194304"];
+  if (!cfg.unsafe) parts.push("-u 256");
+  // Never fatal: a kernel that refuses one of these should still run the
+  // command, just without that guard.
+  return `ulimit ${parts.join(" ")} 2>/dev/null || true`;
+}
+
 /** Build the argv that runs `script` under containment. */
 export function wrapCommand(script: string, cfg: SandboxConfig): { file: string; args: string[] } {
   if (cfg.unsafe) return { file: "/bin/bash", args: ["-c", script] };

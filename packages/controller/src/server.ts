@@ -20,6 +20,7 @@ import { readSite } from "./site.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
 import { choiceKey, doorKey, type Selection } from "@perpetual/shared/site";
+import { onClientGone } from "./disconnect.ts";
 import { NoteQueue } from "./notes.ts";
 import type { RenderReport } from "@perpetual/shared/render";
 
@@ -59,6 +60,22 @@ const active = new Map<string, ActiveTurn>();
 
 /** How long an unused session survives before the sweep takes it. */
 const SWEEP_GRACE_MS = 10 * 60_000;
+
+/**
+ * Two ceilings the machine needs and nobody was counting.
+ *
+ * `inFlight` stopped a session running two turns at once. Nothing stopped
+ * twenty sessions running one each — and a turn is a model stream, a bash
+ * process tree, and a 120ms timer. On one person's computer that is unlikely
+ * and unbounded, which is the combination worth one line.
+ *
+ * The size cap is a REFUSAL, never a deletion. A session's pages are the
+ * reader's work; the honest response to one that has grown too large is to say
+ * so and let them decide, not to tidy it away. It bites at the start of a turn
+ * because that is the only moment where saying no costs nothing.
+ */
+const MAX_CONCURRENT_TURNS = 4;
+const MAX_SESSION_BYTES = 256 * 1024 * 1024;
 
 // A missing sandbox is a refusal, not a downgrade. The machine without bwrap
 // is exactly the machine where running unsandboxed matters most.
@@ -109,6 +126,21 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
     });
   }
   if (inFlight.has(id)) return json(res, 409, { error: "a turn is already running" });
+  if (inFlight.size >= MAX_CONCURRENT_TURNS) {
+    return json(res, 503, {
+      error: `${inFlight.size} turns are already running. Wait for one to finish.`,
+    });
+  }
+
+  const held = await store.size(id);
+  if (held > MAX_SESSION_BYTES) {
+    const mb = (n: number) => `${Math.round(n / 1024 / 1024)}MB`;
+    return json(res, 507, {
+      error: `This session is holding ${mb(held)}, over the ${mb(MAX_SESSION_BYTES)} limit. ` +
+             "Nothing has been deleted — the agent writes into the session's own directory, " +
+             "so clear out what you no longer need, or start a new session.",
+    });
+  }
 
   const body = await new Promise<string>((r) => {
     let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b));
@@ -147,7 +179,11 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
   const send = (e: unknown) => res.write(`data: ${JSON.stringify(e)}\n\n`);
 
   const ac = new AbortController();
-  req.on("close", () => ac.abort());
+  // On `res`, never on `req` — see disconnect.ts. Attached to the request's
+  // body stream, this listener was registered after that stream had already
+  // closed, so it never fired: the stop button stopped nothing and a closed
+  // tab left the turn running to completion.
+  onClientGone(req, res, () => ac.abort());
 
   const stream = runTurn({
     ask: input,
