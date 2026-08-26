@@ -295,12 +295,25 @@ const AIM_LABEL: Record<string, string> = {
  * being shown and being sent would be worse than no value at all.
  */
 let aim: Anchor | undefined;
+/**
+ * Did the READER point at this, or did the app guess it?
+ *
+ * Opening the composer takes a guess — the block nearest the middle of the
+ * view — so that "make that shorter" means something without anyone having to
+ * click first. That guess must never be treated as a decision. Clicking the
+ * block you are pointing at undoes it, and without this flag the FIRST click
+ * on the middle block undid an aim the reader had never made: open, guess that
+ * block, then read the click that caused the open as "undo". The block in the
+ * middle of the screen was unselectable, and no other block was.
+ */
+let aimChosen = false;
 
 function clearAim() {
   for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
   aimWatch?.disconnect();
   aimWatch = undefined;
   aim = undefined;
+  aimChosen = false;
   composer.aim(null);
 }
 
@@ -322,17 +335,18 @@ function reaim() {
   const page = pages.find((p) => p.id === aim!.page);
   if (!page) { setAim(undefined); return; }
 
+  const chosen = aimChosen;                         // survives the re-set below
   if (aim.id) {
     const now = page.blocks.findIndex((b) => b.id === aim!.id);
     if (now === -1) { setAim({ page: aim.page }); return; }
-    if (now !== aim.index) setAim({ ...aim, index: now });
-    else setAim(aim);                               // repaint: the node may be new
+    if (now !== aim.index) setAim({ ...aim, index: now }, chosen);
+    else setAim(aim, chosen);                       // repaint: the node may be new
     return;
   }
   // Unnamed: the index may still be right, but nothing can prove it. Keep it
   // only while it points at a block of the same kind — otherwise let it go.
   const still = page.blocks[aim.index];
-  setAim(still ? aim : { page: aim.page });
+  setAim(still ? aim : { page: aim.page }, still ? chosen : false);
 }
 
 /**
@@ -379,11 +393,13 @@ function paintAim(offScreen = false) {
   composer.placeholder("Change this, or ask about it…");
 }
 
-function setAim(a: Anchor | undefined) {
+function setAim(a: Anchor | undefined, chosen = false) {
   for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
   aimWatch?.disconnect();
   aimWatch = undefined;
   aim = a;
+  // Only a block the reader indicated is theirs to undo.
+  aimChosen = chosen && a?.index != null;
   const node = a?.index != null ? docFor(a.page)?.children[a.index] : undefined;
   if (node) { node.classList.add("anchored"); watchAim(node); }
   paintAim();
@@ -923,9 +939,14 @@ deckHost.addEventListener("mouseup", (e) => {
   composer.open();
   const index = [...doc.children].indexOf(node);
   // Clicking the block you are already pointing at stops pointing at it — the
-  // gesture undoes itself, which is the one people try first. Selecting words
-  // inside it is not that gesture: it is a narrower aim, not an undo.
-  if (!quote && aim?.page === id && aim.index === index) { composer.onUnaim(); return; }
+  // gesture undoes itself, which is the one people try first. Only if the
+  // reader CHOSE it, though: `composer.open()` above has just guessed at the
+  // block nearest the middle of the view, and undoing a guess nobody made is
+  // how the middle of the screen became unclickable. Selecting words inside it
+  // is not the undo gesture either: it is a narrower aim.
+  if (!quote && aimChosen && aim?.page === id && aim.index === index) {
+    composer.onUnaim(); return;
+  }
   // The name, when the block has one, is what keeps this pointing at the thing
   // the reader chose even if the agent rearranges the page while they type.
   const blockId = node.dataset.blockId;
@@ -933,7 +954,7 @@ deckHost.addEventListener("mouseup", (e) => {
     page: id, index,
     ...(blockId ? { id: blockId } : {}),
     ...(quote ? { quote } : {}),
-  });
+  }, true);
 });
 
 composer.onType = (text) => { if (!sessionId) { filter = text; paintLibrary(); } };

@@ -194,9 +194,14 @@ export class Composer {
 
   open() {
     if (this.state === "busy") return;
+    // Guess what the reader is looking at only when the composer actually
+    // OPENS. Re-guessing on every click while it is already open overwrites
+    // the block they just chose — and, worse, marks the overwrite as something
+    // they did not choose, so the click that undoes an aim never registered.
+    const wasOpen = this.state === "open";
     this.state = "open";
     this.paint();
-    this.onOpen();
+    if (!wasOpen) this.onOpen();
     this.input.focus();
     this.root.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
