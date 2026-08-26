@@ -14,7 +14,7 @@
  * morphs the DOM rather than rebuilding it, so a rewritten page keeps its
  * scroll position and its identity.
  */
-import { readSite } from "./site.ts";
+import { readSite, type SiteCache } from "./site.ts";
 import type { Block } from "@perpetual/shared/blocks";
 import type { Page, Problem, Site } from "@perpetual/shared/site";
 import type { TurnEvent } from "@perpetual/shared/events";
@@ -84,6 +84,12 @@ function keyedOps(page: string, before: Block[], after: Block[]): TurnEvent[] {
 export class SiteWatcher {
   private siteDir: string;
   private prev = new Map<string, Page>();
+  /**
+   * Pages as last read, so a poll where nothing changed reads nothing. The
+   * watcher polls eight times a second for the length of a turn and almost
+   * every one of those polls used to re-read and re-parse the entire site.
+   */
+  private cache: SiteCache = new Map();
   private seenProblems = new Set<string>();
   /** Problems raised since the last drain — fed back to the agent. */
   private fresh: Problem[] = [];
@@ -94,14 +100,14 @@ export class SiteWatcher {
 
   /** Adopt the current state without emitting. Used at turn start. */
   async prime(): Promise<Site> {
-    const site = await readSite(this.siteDir);
+    const site = await readSite(this.siteDir, this.cache);
     this.prev = new Map(site.pages.map((p) => [p.id, p]));
     for (const p of site.problems) this.seenProblems.add(key(p));
     return site;
   }
 
   async poll(): Promise<TurnEvent[]> {
-    const site = await readSite(this.siteDir);
+    const site = await readSite(this.siteDir, this.cache);
     const events: TurnEvent[] = [];
     const next = new Map(site.pages.map((p) => [p.id, p]));
 

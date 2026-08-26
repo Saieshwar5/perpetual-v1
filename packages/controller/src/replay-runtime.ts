@@ -102,6 +102,9 @@ export function createReplayRuntime(): Runtime {
   return {
     modelId: "replay",
     providerId: "replay",
+    // Big enough that the context guard never fires in replay: the scripted
+    // turn is fixed, so a warning about running out would be noise.
+    contextWindow: 1_000_000,
     conversation(): Conversation {
       let ask = "";
       let num = "001";

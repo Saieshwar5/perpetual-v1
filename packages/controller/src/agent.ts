@@ -44,6 +44,29 @@ const WARN_AT = 3;
 const MAX_TURN_MS = 5 * 60_000;
 const POLL_MS = 120;
 
+/**
+ * The other budget, which had no gauge at all.
+ *
+ * Steps were counted and time was counted; context was not. Each command's
+ * output is capped at 40KB, but nothing capped the SUM — twenty-two steps of
+ * large output can fill any window, and when it fills, the provider errors and
+ * the turn dies holding a half-written page.
+ *
+ * MEASURED, NOT ESTIMATED. Every step's result reports the tokens the provider
+ * actually charged for: `input` is what was sent fresh and `cacheRead` is what
+ * came from the prompt cache, so their sum is the real size of the
+ * conversation at that moment. Counting characters here would be a second,
+ * worse opinion about a number we are already told.
+ *
+ * Three thresholds, because a warning that arrives with no room left to act on
+ * it is not a warning. The first two are advice; the last one stops the turn
+ * while the page is still coherent, which is strictly better than letting the
+ * provider refuse the next request.
+ */
+const CONTEXT_WARN = 0.60;
+const CONTEXT_URGENT = 0.80;
+const CONTEXT_STOP = 0.92;
+
 export interface TurnOptions {
   ask: string;
   runtime: Runtime;
@@ -73,6 +96,29 @@ export interface TurnSummary {
   steps: number;
   touched: string[];
   stopped: StopCause;
+}
+
+/**
+ * The context gauge, phrased so the agent can act on it.
+ *
+ * Same rule as the step countdown: say the number, say what to do. An agent
+ * told only that it is "running low" cannot tell whether its next command made
+ * things better or worse.
+ */
+function contextNote(used: number, window: number): string | null {
+  if (!window || used <= 0) return null;
+  const share = used / window;
+  if (share < CONTEXT_WARN) return null;
+  const pct = Math.round(share * 100);
+  const k = (n: number) => `${Math.round(n / 1000)}k`;
+  if (share >= CONTEXT_URGENT) {
+    return `[perpetual] You have used ${pct}% of your context (${k(used)} of ${k(window)} ` +
+           "tokens). Write what you have to ui/pages/ NOW. Do not read another file: " +
+           "the next large output will end this turn wherever it stands.";
+  }
+  return `[perpetual] You have used ${pct}% of your context (${k(used)} of ${k(window)} ` +
+         "tokens). Stop exploring and start writing — read only what you still need, " +
+         "and prefer `head` over `cat` on anything large.";
 }
 
 /** The countdown, phrased so the agent can act on it rather than just know it. */
@@ -121,6 +167,10 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
   const summary = (async (): Promise<TurnSummary> => {
     const started = Date.now();
     const usage = { input: 0, output: 0, cacheRead: 0, costUsd: 0 };
+    // The latest snapshot, NOT a running total: each request carries the whole
+    // conversation, so the last step's input is how big the context is now.
+    // Summing them would count the same messages over and over.
+    let context = 0;
 
     // Everything already on disk is the baseline: this turn's events describe
     // only what this turn changed.
@@ -172,6 +222,18 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
         // the page; an unwarned one is cut off mid-sentence.
         if (MAX_STEPS - steps - 1 <= WARN_AT) stopped = "steps";
 
+        // Stopping here is a choice: the alternative is asking anyway and
+        // having the provider refuse, which ends the turn in exactly the same
+        // place but with an error the reader cannot act on.
+        if (o.runtime.contextWindow && context / o.runtime.contextWindow >= CONTEXT_STOP) {
+          stopped = "context";
+          q.push({
+            type: "error",
+            message: "The turn ran out of room to think in. The page is as far as it got.",
+          });
+          break;
+        }
+
         const step = convo.step({
           ...(o.effort ? { effort: o.effort } : {}),
           ...(o.signal ? { signal: o.signal } : {}),
@@ -184,6 +246,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
         usage.output += result.usage.output;
         usage.cacheRead += result.usage.cacheRead;
         usage.costUsd += result.usage.costUsd;
+        context = result.usage.input + result.usage.cacheRead;
 
         if (result.errorMessage) {
           stopped = "error";
@@ -226,6 +289,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
           const notes = [
             watcher.drainFeedback(),
             o.notes?.drain() ?? null,
+            contextNote(context, o.runtime.contextWindow),
             budgetNote(MAX_STEPS - steps - 1),
           ].filter(Boolean).join("\n\n");
           convo.toolResult(call.id, "shell", notes ? `${r.text}\n\n${notes}` : r.text, false);
