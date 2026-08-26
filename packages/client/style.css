@@ -700,6 +700,51 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pill[data-state="idle"] .aim { display: none; }
 .pill[data-state="busy"] .aim { color: var(--ink-2); font-style: italic; }
 
+/* ------------------------------------------------------------- choice */
+
+/* The agent asking the reader something, answered by touch.
+   Doors sit at the foot of a page and lead OUT of it; a choice interrupts the
+   page because the work has stopped until it is answered — so it is a panel
+   with a frame, at the point in the page where the question came up. */
+.doc .choice {
+  margin-top: 1.9rem; margin-bottom: 1.9rem;
+  padding: 15px 16px 13px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--line-2);
+}
+.doc .cprompt {
+  margin: 0 0 11px; font-size: .95em; line-height: 1.5; color: var(--ink);
+}
+
+/* Wrapping rows rather than a grid: two short options should sit side by side,
+   and four file paths should not be crushed into columns to match them. */
+.doc .copts { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.copt {
+  flex: 1 1 220px; display: flex; flex-direction: column; gap: 3px;
+  text-align: left; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 9px;
+  padding: 10px 13px; color: var(--ink);
+  transition: border-color .13s, background .13s, transform .13s var(--ease);
+}
+.copt:hover { border-color: var(--accent); background: var(--accent-sf); transform: translateY(-1px); }
+.copt .clabel { font-size: .92em; line-height: 1.4; }
+/* What a person actually decides by: the path, the size, the date. */
+.copt .chint {
+  font-family: var(--mono); font-size: .72em; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Answered. The same three states a door has — the one taken, and the ones it
+   closed — because an answer should stay on the page as the record of it. */
+.copt.taken {
+  border-color: var(--accent); background: var(--accent-sf); cursor: default;
+}
+.copt.taken .clabel { color: var(--accent); }
+.copt.taken .clabel::after { content: " ✓"; }
+.copt.spent { opacity: .55; cursor: default; }
+.copt.taken:hover, .copt.spent:hover { transform: none; }
+.copt.spent:hover { border-color: var(--line); background: var(--bg); }
+
 /* --------------------------------------------------------------- next */
 
 /* Doors, not buttons. The page has just ended; these are quiet enough to be

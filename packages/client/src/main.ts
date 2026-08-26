@@ -21,7 +21,8 @@ import { Rail } from "./rail.ts";
 import { Composer } from "./composer.ts";
 import { mountSettings, load as loadSettings } from "./settings.ts";
 import { fitAll } from "./fit.ts";
-import type { Anchor, Page, Site, SessionIndex } from "@perpetual/shared/site";
+import { choiceKey, doorKey } from "@perpetual/shared/site";
+import type { Anchor, Page, Selection, Site, SessionIndex } from "@perpetual/shared/site";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -48,16 +49,68 @@ let attempted = false;
 /** The library, as loaded. Filtering is a view over this, not a refetch. */
 let library: SessionIndex[] = [];
 /** What a rendered block may do. Defined once so every render path agrees. */
-/** Doors already walked through, question -> the page it built. */
+/** Doors already walked through: `doorKey(page, question)` -> the page it built. */
 let answered: Record<string, string> = {};
+/** Choices already answered: `choiceKey(page, block)` -> the option's id. */
+let chosen: Record<string, string> = {};
 
-const ACTIONS: BlockActions = {
-  link: (id) => deck.gotoId(id),
-  answered: (q) => answered[q] ?? null,
-  // A door the agent offered. Clicking it is asking the question, so it goes
-  // through exactly the path a typed question does.
-  next: (q) => { clearAim(); void composer.send(q); },
-};
+/**
+ * What the reader touched, waiting to travel with the turn it started.
+ *
+ * Held for the moment between the click and the submit rather than passed
+ * through the composer, because the composer is chrome: it knows about text
+ * and nothing about blocks. Set immediately before `send`, consumed and
+ * cleared at the top of `onSubmit`, so a typed question can never pick one up.
+ */
+let pendingSelection: Selection | undefined;
+
+/**
+ * The actions for blocks on ONE page.
+ *
+ * Per page rather than global, because every answer has to say where it came
+ * from: two pages can offer the same door, and a choice is only identified by
+ * its page and its name together. The global version of this is exactly how
+ * doors ended up colliding across pages.
+ */
+function actionsFor(page: string): BlockActions {
+  return {
+    link: (id) => deck.gotoId(id),
+    // Old sessions recorded doors by question text alone. Read those too, so a
+    // session from before the key changed still shows what was taken.
+    answered: (q) => answered[doorKey(page, q)] ?? answered[q] ?? null,
+    picked: (block) => chosen[choiceKey(page, block)] ?? null,
+
+    // A door the agent offered. Clicking it still asks the question — that is
+    // what a door IS — but it now says so: which page, which question.
+    next: (q) => {
+      clearAim();
+      pendingSelection = { page, control: "next", option: q, label: q };
+      void composer.send(q);
+    },
+
+    // A choice the agent asked. The ask reads as the exchange it was, so the
+    // rail's thread stays legible; the option's id travels beside it, and that
+    // is what the agent actually reads.
+    choose: (b, o) => {
+      if (!b.id) return;
+      clearAim();
+      pendingSelection = {
+        page, control: "choice", block: b.id,
+        option: o.id, label: o.label, prompt: b.prompt,
+      };
+      // Painted at once, so the answer lands under the reader's finger rather
+      // than after a turn. The server records it on the way in, so a reload
+      // agrees with what they just saw.
+      chosen[choiceKey(page, b.id)] = o.id;
+      repaintControls();
+      void composer.send(`${b.prompt} — ${o.label}`);
+    },
+  };
+}
+
+/** The actions for whichever page a node belongs to. */
+const actionsForNode = (doc: Element): BlockActions =>
+  actionsFor(doc.closest<HTMLElement>(".panel")?.dataset.page ?? "");
 let filter = "";
 
 const status = (text: string, tone: "" | "work" | "bad" = "") => composer.status(text, tone);
@@ -79,7 +132,8 @@ function makePanel(page: Page) {
   dock.className = "dock";
   sheet.append(doc, dock);
   root.append(sheet);
-  for (const b of page.blocks) appendBlock(doc, b, ACTIONS);
+  const acts = actionsFor(page.id);
+  for (const b of page.blocks) appendBlock(doc, b, acts);
   sheet.addEventListener("scroll", () => { if (page.id === deck.activeId) placeComposer(); },
     { passive: true });
   return { root, sheet, doc, dock };
@@ -108,16 +162,19 @@ function docFor(id: string): HTMLElement | null {
  * scrolls, which is exactly what it did before.
  */
 /**
- * Re-render every `next` block. Their markup depends on session state rather
- * than on the page file, so nothing upstream notices when it changes.
+ * Re-render every control. Their markup depends on what the reader has
+ * ANSWERED, which lives in the session rather than in the page file — so
+ * nothing upstream notices when it changes and they have to be repainted by
+ * hand.
  */
-function repaintDoors() {
+function repaintControls() {
   for (const page of pages) {
     const doc = docFor(page.id);
     if (!doc) continue;
+    const acts = actionsFor(page.id);
     for (const [i, b] of page.blocks.entries()) {
-      if (b.kind !== "next") continue;
-      doc.children[i]?.replaceWith(renderBlock(b, ACTIONS));
+      if (b.kind !== "next" && b.kind !== "choice") continue;
+      doc.children[i]?.replaceWith(renderBlock(b, acts));
     }
   }
 }
@@ -366,6 +423,7 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   ]);
   titleEl.textContent = index.title;
   answered = index.answered ?? {};
+  chosen = index.chosen ?? {};
   for (const p of site.pages) addPage(p);
 
   // Always open on the last page — a session is resumed at its newest answer,
@@ -423,7 +481,7 @@ function handle(ev: WireEvent) {
       const page = pages.find((p) => p.id === ev.page);
       if (!doc || !page) break;
       page.blocks[ev.index] = ev.block;
-      appendBlock(doc, ev.block, ACTIONS);
+      appendBlock(doc, ev.block, actionsFor(ev.page));
       break;
     }
 
@@ -435,7 +493,7 @@ function handle(ev: WireEvent) {
       page.blocks[ev.index] = ev.block;
       // Swapped in place: everything around it keeps its identity, and the
       // reader keeps their scroll position.
-      node.replaceWith(renderBlock(ev.block, ACTIONS));
+      node.replaceWith(renderBlock(ev.block, actionsFor(ev.page)));
       reaim();
       break;
     }
@@ -453,7 +511,7 @@ function handle(ev: WireEvent) {
       const page = pages.find((p) => p.id === ev.page);
       if (!doc || !page) break;
       page.blocks.splice(ev.index, 0, ev.block);
-      const node = renderBlock(ev.block, ACTIONS);
+      const node = renderBlock(ev.block, actionsFor(ev.page));
       const at = doc.children[ev.index];
       if (at) doc.insertBefore(node, at); else doc.append(node);
       reaim();
@@ -493,7 +551,8 @@ function handle(ev: WireEvent) {
       // Rebuilt in place, so the panel keeps its identity and the reader keeps
       // their position in the deck.
       doc.replaceChildren();
-      for (const b of ev.page.blocks) appendBlock(doc, b, ACTIONS);
+      const acts = actionsFor(ev.page.id);
+      for (const b of ev.page.blocks) appendBlock(doc, b, acts);
       paintRail();
       reaim();
       break;
@@ -522,10 +581,11 @@ function handle(ev: WireEvent) {
       break;
 
     case "turn_saved":
-      // The doors did not change on disk, so the watcher will not report them
-      // — but which of them have been taken has. Repaint them by hand.
+      // The controls did not change on disk, so the watcher will not report
+      // them — but what has been answered has. Repaint them by hand.
       answered = ev.answered;
-      repaintDoors();
+      chosen = ev.chosen ?? {};
+      repaintControls();
       refit();
       break;
 
@@ -588,7 +648,13 @@ composer.onSubmit = async (q) => {
   // Asked from the library: the session comes into existence because of the
   // question, and we move to it at once so the reader watches it assemble.
   const fromLibrary = !sessionId;
-  const anchor = fromLibrary ? undefined : (aim ?? currentAnchor());
+  // Consumed here and nowhere else: a click sets it immediately before
+  // sending, so anything typed arrives with it already empty.
+  const selection = pendingSelection;
+  pendingSelection = undefined;
+  // A click already says where it came from; an implicit anchor on top of it
+  // would be a second, weaker answer to the same question.
+  const anchor = fromLibrary || selection ? undefined : (aim ?? currentAnchor());
   clearAim();
   think = "";
   composer.working(q);
@@ -598,7 +664,7 @@ composer.onSubmit = async (q) => {
   try {
     const id = fromLibrary ? await startSession() : sessionId!;
     attempted = true;               // this session has been used; it stays
-    for await (const ev of runTurn(id, q, anchor, turn.signal)) handle(ev);
+    for await (const ev of runTurn(id, q, anchor, selection, turn.signal)) handle(ev);
   } catch (err) {
     if ((err as Error)?.name !== "AbortError") {
       status(err instanceof Error ? err.message : String(err), "bad");

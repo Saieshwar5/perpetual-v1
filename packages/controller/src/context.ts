@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Block } from "@perpetual/shared/blocks";
-import type { Anchor, Site } from "@perpetual/shared/site";
+import type { Anchor, Selection, Site } from "@perpetual/shared/site";
 
 const PROMPTS = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
 
@@ -74,11 +74,40 @@ function describeBlockShape(b: Block): string {
       return `a link to ${b.page}`;
     case "next":
       return `the questions this page leaves open`;
+    case "choice":
+      return `the choice "${b.prompt}"`;
   }
 }
 
+/**
+ * A click, in the words the agent needs.
+ *
+ * Two controls, two different things to say — and the difference is the whole
+ * reason the channel exists. A door is a FORK: the reader has asked for a room
+ * that does not exist yet, so the answer is a new page. A choice is an ANSWER:
+ * the agent asked something it could not proceed without, and now it can, so
+ * the work continues where it was.
+ *
+ * The option comes back as the token the agent wrote itself. There is nothing
+ * here to parse, which is the point — a sentence saying "the second one" is
+ * the failure mode this replaces.
+ */
+function describeSelection(sel: Selection): string {
+  if (sel.control === "next") {
+    return `\nThe user did not type this — they took a door on **${sel.page}**: ` +
+      `"${sel.option}". That is a fork: they are asking for a page that does not ` +
+      "exist yet, so write one rather than amending the page they came from.";
+  }
+  return `\nThe user did not type this — they answered your choice ` +
+    `\`${sel.block}\` on **${sel.page}**` +
+    (sel.prompt ? ` ("${sel.prompt}")` : "") +
+    ` by picking \`${sel.option}\` — ${sel.label}. That is the answer you were ` +
+    "waiting for: continue the work it was blocking. Do not ask again, and do not " +
+    "rewrite the choice — the reader's answer stays on the page as the record of it.";
+}
+
 export function turnMessage(
-  opts: { ask: string; site: Site; pastAsks: string[]; anchor?: Anchor },
+  opts: { ask: string; site: Site; pastAsks: string[]; anchor?: Anchor; selection?: Selection },
 ): string {
   const parts: string[] = [];
 
@@ -121,6 +150,8 @@ export function turnMessage(
       );
     }
   }
+
+  if (opts.selection) parts.push(describeSelection(opts.selection));
 
   parts.push(`\n--- The user now asks ---\n\n${opts.ask}`);
   return parts.join("\n");

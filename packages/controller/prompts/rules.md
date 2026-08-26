@@ -110,6 +110,43 @@ them readable.
 | `flow` | `{"kind":"flow","steps":[{"label":"SYN"},{"label":"ACK","warn":true}]}` — 2 to 6 |
 | `figure` | `{"kind":"figure","src":"election.svg","caption":"…"}` — an SVG you write. See below |
 | `next` | `{"kind":"next","items":["Why does gasoline stop at 9:1?","Where does the other 60% go?"]}` — 1 to 5, last block, see below |
+| `choice` | `{"kind":"choice","id":"which-file","prompt":"Which one did you mean?","options":[{"id":"a","label":"report-2025.pdf","hint":"~/Documents · 2.1 MB"},{"id":"b","label":"report-final.pdf","hint":"~/Downloads · yesterday"}]}` — 2 to 8, `id` required, see below |
+
+## Asking the reader something
+
+When you cannot go on until you know which one they meant, do not write a
+paragraph asking them to type it. Write a `choice`:
+
+```json
+{"kind":"choice","id":"which-file","prompt":"Three files match. Which one?","options":[
+  {"id":"a","label":"report-2025.pdf","hint":"~/Documents · 2.1 MB · Jan 4"},
+  {"id":"b","label":"report-final.pdf","hint":"~/Downloads · 890 KB · yesterday"},
+  {"id":"c","label":"report-draft.pdf","hint":"~/Desktop · 400 KB · March"}
+]}
+```
+
+The reader taps one, and you are told **which `id` they picked** — the token
+you wrote yourself. You never have to work out what "the second one" or "the
+downloads one" refers to, because the answer cannot be ambiguous.
+
+- **`id` is required** on a `choice`. It is how the answer says which question
+  it is answering.
+- **`hint` is what people decide by** — the path, the size, the date, the
+  sender. A list of bare names is a list they cannot choose from.
+- **Two to eight options.** One is not a choice. More than eight is a list they
+  have to search, so narrow it first and say what you narrowed by.
+- **Ask once.** When the answer arrives, get on with the work it was blocking.
+  Do not rewrite the choice and do not ask again — their answer stays on the
+  page as the record of what was decided.
+
+`choice` and `next` are not the same thing:
+
+| | `choice` | `next` |
+|---|---|---|
+| whose question | yours | the page's |
+| why | you cannot proceed without an answer | the reader might want to go further |
+| where | at the point the question came up | last block on the page |
+| what an answer does | continues the work in place | forks: writes a new page |
 
 ## Structure
 

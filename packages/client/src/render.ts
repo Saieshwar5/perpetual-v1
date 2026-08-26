@@ -7,7 +7,7 @@
  * 002 without anyone having to enforce consistency.
  */
 import { INLINE_SPLIT_RE } from "@perpetual/shared/blocks";
-import type { Block } from "@perpetual/shared/blocks";
+import type { Block, Choice } from "@perpetual/shared/blocks";
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K, cls?: string, text?: string,
@@ -56,6 +56,10 @@ export interface BlockActions {
   next?: (question: string) => void;
   /** The page a door already produced, if it has been walked through. */
   answered?: (question: string) => string | null;
+  /** The option already picked on this choice, if the reader has answered it. */
+  picked?: (blockId: string) => string | null;
+  /** The reader picked one. The click carries the option's own id, not its words. */
+  choose?: (block: Choice, option: { id: string; label: string }) => void;
 }
 
 /**
@@ -176,6 +180,36 @@ function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
         s.append(box);
       }
       return s;
+    }
+
+    case "choice": {
+      // The reader answers by touching one. The three states are the ones a
+      // door already has — open, taken, and the siblings it closed — because a
+      // decision, once made, should stay on the page as the record of it.
+      const wrap = el("div", "choice");
+      const answeredWith = b.id ? on.picked?.(b.id) ?? null : null;
+      wrap.append(el("p", "cprompt", b.prompt));
+
+      const opts = el("div", "copts");
+      for (const o of b.options) {
+        const btn = el("button", "copt");
+        btn.type = "button";
+        btn.append(el("span", "clabel", o.label));
+        if (o.hint) btn.append(el("span", "chint", o.hint));
+
+        if (answeredWith === o.id) {
+          btn.classList.add("taken");
+          btn.disabled = true;
+        } else if (answeredWith) {
+          btn.classList.add("spent");
+          btn.disabled = true;
+        } else {
+          btn.addEventListener("click", () => on.choose?.(b, { id: o.id, label: o.label }));
+        }
+        opts.append(btn);
+      }
+      wrap.append(opts);
+      return wrap;
     }
 
     case "next": {

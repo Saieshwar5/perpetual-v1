@@ -6,21 +6,32 @@
  * translation layer — what the agent's directory did is what arrives here.
  */
 import type { TurnEvent } from "@perpetual/shared/events";
-import type { Anchor } from "@perpetual/shared/site";
+import type { Anchor, Selection } from "@perpetual/shared/site";
 
 export type WireEvent =
   | TurnEvent
-  | { type: "turn_saved"; pages: number; answered: Record<string, string> };
+  | {
+      type: "turn_saved"; pages: number;
+      answered: Record<string, string>;
+      chosen: Record<string, string>;
+    };
 
 export async function* runTurn(
-  sessionId: string, input: string, anchor?: Anchor, signal?: AbortSignal,
+  sessionId: string, input: string,
+  anchor?: Anchor, selection?: Selection, signal?: AbortSignal,
 ): AsyncIterable<WireEvent> {
   const res = await fetch(`/sessions/${sessionId}/turn`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     // The anchor rides with the question: which page, and which block the
-    // reader was looking at when they asked.
-    body: JSON.stringify({ input, ...(anchor ? { anchor } : {}) }),
+    // reader was looking at when they asked. A selection rides with it too
+    // when the turn began with a touch rather than a sentence — the control,
+    // and the option's own id.
+    body: JSON.stringify({
+      input,
+      ...(anchor ? { anchor } : {}),
+      ...(selection ? { selection } : {}),
+    }),
     ...(signal ? { signal } : {}),
   });
 

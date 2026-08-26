@@ -62,7 +62,7 @@ export class SessionStore {
     const now = new Date().toISOString();
     const index: SessionIndex = {
       id, title: "New session", createdAt: now, updatedAt: now, pageCount: 0,
-      asks: [], answered: {},
+      asks: [], answered: {}, chosen: {},
     };
     // The agent's world is created empty but complete, so its first command
     // never has to guess at the layout.
@@ -74,7 +74,7 @@ export class SessionStore {
 
   async read(id: string): Promise<SessionIndex> {
     const raw = JSON.parse(await readFile(join(this.dir(id), "session.json"), "utf8"));
-    return { answered: {}, ...raw } as SessionIndex;    // sessions predate the field
+    return { answered: {}, chosen: {}, ...raw } as SessionIndex;   // older sessions predate these
   }
 
   async write(index: SessionIndex) {
