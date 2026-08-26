@@ -1,0 +1,23 @@
+{
+  "name": "perpetual",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "pnpm --filter @perpetual/client build && pnpm --filter @perpetual/controller dev",
+    "replay": "PERPETUAL_REPLAY=1 pnpm dev",
+    "build": "pnpm --filter @perpetual/client build",
+    "watch": "pnpm --filter @perpetual/client watch",
+    "test": "pnpm --filter @perpetual/controller test",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "models": "pnpm --filter @perpetual/controller models"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

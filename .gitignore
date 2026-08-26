@@ -1,0 +1,39 @@
+# --- planning and design notes -------------------------------------------
+# proj-docs/ is the thinking, not the product: 16 plan documents and the
+# prototype they were argued out in. Kept local on purpose.
+proj-docs/
+
+# --- session data ---------------------------------------------------------
+# Every session directory is a sandbox root the agent writes into freely.
+# Nothing under here is ever source.
+.perpetual/
+.sessions/
+
+# --- secrets --------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- build output ---------------------------------------------------------
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# --- logs and scratch -----------------------------------------------------
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.tmp/
+tmp/
+*.tmp
+
+# --- editor and OS --------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

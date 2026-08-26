@@ -1,0 +1,15 @@
+{
+  "name": "@perpetual/controller",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types --env-file-if-exists=../../.env src/server.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "models": "node --experimental-strip-types src/models.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.84.3",
+    "@perpetual/shared": "workspace:*"
+  }
+}

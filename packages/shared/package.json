@@ -1,0 +1,12 @@
+{
+  "name": "@perpetual/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./blocks": "./src/blocks.ts",
+    "./site": "./src/site.ts",
+    "./events": "./src/events.ts"
+  }
+}

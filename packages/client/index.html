@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perpetual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;450;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
+<link rel="stylesheet" href="/style.css">
+<script>
+  // Before first paint: a deferred module would flash the wrong theme.
+  try {
+    var s = JSON.parse(localStorage.getItem("perpetual.settings") || "{}");
+    if (s.theme && s.theme !== "system") document.documentElement.dataset.theme = s.theme;
+    var t = { small: ".92", normal: "1", large: "1.12", larger: "1.26" }[s.type];
+    if (t) document.documentElement.style.setProperty("--type", t);
+    if (s.measure === "wide") document.documentElement.style.setProperty("--page-base", "64rem");
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<!-- ALTITUDE 1 — the library. Sessions, nothing else. -->
+<section class="view lib" id="library">
+  <div class="lib-inner">
+    <header class="lib-head">
+      <h1>Perpetual</h1>
+      <p class="sub">One session is one website. Ask, and it gets written.</p>
+    </header>
+
+    <!-- Where the composer lives on this view. Typing here starts a session;
+         there is no "New session" button because typing IS creating one. -->
+    <div class="libhost" id="libhost"></div>
+    <div class="matchline" id="matchline"></div>
+
+    <div class="grid" id="grid"></div>
+  </div>
+</section>
+
+<!-- ALTITUDE 2 — a session. Fixed chrome; the deck in the middle is the agent's. -->
+<section class="view sess" id="session" hidden>
+  <!-- No horizontal bar. On a laptop the scarce dimension is height and the
+       abundant one is width, so the chrome lives in the rail — which was
+       already a vertical strip, already 46px, and already mostly empty.
+       Identity at the top, navigation in the middle, environment at the
+       foot. -->
+  <aside class="rail" id="rail" tabindex="-1">
+    <div class="railtop">
+      <button class="railbtn" id="back" type="button" aria-label="Back to the library">←</button>
+      <span class="stitle wide" id="stitle"></span>
+    </div>
+
+    <div class="railmid" id="railmid"></div>
+
+    <div class="railfoot">
+      <span class="count" id="scount"></span>
+      <button class="railbtn" id="prefsbtn" type="button"
+              aria-expanded="false" aria-label="Reading settings">Aa</button>
+      <span class="dot narrow" id="modedot"></span>
+      <div class="env wide">
+        <span class="chip" id="badge"></span>
+        <span class="chip" id="sandbox"></span>
+      </div>
+    </div>
+  </aside>
+
+  <main class="deck" id="deck"></main>
+
+  <!-- Reader settings. Chrome, never the canvas: the agent cannot see or
+       reach any of this. Anchored beside the rail's foot, where its button is. -->
+  <div class="prefs" id="prefs" hidden>
+    <div class="prow">
+      <span>Theme</span>
+      <div class="seg" data-key="theme">
+        <button type="button" data-v="system">System</button>
+        <button type="button" data-v="light">Light</button>
+        <button type="button" data-v="dark">Dark</button>
+      </div>
+    </div>
+    <div class="prow">
+      <span>Text size</span>
+      <div class="seg" data-key="type">
+        <button type="button" data-v="small">S</button>
+        <button type="button" data-v="normal">M</button>
+        <button type="button" data-v="large">L</button>
+        <button type="button" data-v="larger">XL</button>
+      </div>
+    </div>
+    <div class="prow">
+      <span>Page width</span>
+      <div class="seg" data-key="measure">
+        <button type="button" data-v="normal">Normal</button>
+        <button type="button" data-v="wide">Wide</button>
+      </div>
+    </div>
+    <div class="prow">
+      <span>Columns</span>
+      <div class="seg" data-key="columns">
+        <button type="button" data-v="auto">Auto</button>
+        <button type="button" data-v="off">Single</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The composer floats here when the reader is mid-page, and moves into
+       the current page's .dock when they reach its end. One element. -->
+  <div class="floathost" id="floathost"></div>
+
+</section>
+
+  <div class="pill" id="pill" data-state="idle">
+    <button class="invite" type="button">Ask <kbd>⌘K</kbd></button>
+
+    <div class="aim" hidden></div>
+
+    <form class="pform">
+      <input type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Ask">
+      <span class="enter">↵</span>
+    </form>
+
+    <div class="work">
+      <code class="cmd"></code>
+      <button class="stop" type="button" aria-label="Stop this turn">■</button>
+      <pre class="out"></pre>
+    </div>
+
+    <div class="pstatus"></div>
+  </div>
+
+<script type="module" src="/dist/main.js"></script>
+</body>
+</html>

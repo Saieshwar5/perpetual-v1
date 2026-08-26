@@ -1,0 +1,731 @@
+/* ------------------------------------------------------------------------
+   Perpetual — the fixed chrome and the page canvas.
+
+   Everything here is design tokens plus two zones. The tokens matter more
+   than they look: the agent writes twelve pages across a session and they
+   have to read as ONE website, so no page ever picks a colour or a size —
+   it picks a block, and the block is styled here, once.
+   ------------------------------------------------------------------------ */
+
+:root {
+  --bg:        #f1f1ee;
+  --surface:   #fbfbf9;
+  --surface-2: #e9e9e4;
+  --ink:       #17181a;
+  --ink-2:     #5c616a;
+  --ink-3:     #8d929a;
+  --line:      #dededa;
+  --line-2:    #cbcbc4;
+  --accent:    #0e6e5b;
+  --accent-in: #ffffff;
+  --accent-sf: rgba(14, 110, 91, .10);
+  --warn:      #a2542a;
+  --warn-sf:   rgba(162, 84, 42, .10);
+
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --sans:  "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --mono:  "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* The reader's three dials. Set on :root by settings.ts, consumed only
+     inside .doc — the chrome must not grow when the prose does. */
+  --type: 1;
+  /* ONE width for the whole page. Text used to be capped at a reading measure
+     of 38rem while figures, charts and tables filled 50rem, so half of every
+     page was a narrow ribbon of prose with empty space beside it and a chart
+     underneath that was 200px wider. Two different widths in one column is
+     what made the page look unfinished. Now prose, figures and the composer
+     all fill --column, and the only thing that varies is the page's own cap.
+
+     In rem rather than ch: `ch` resolves against the element's OWN font size,
+     so the same value means one width on the container and another on a
+     paragraph. rem resolves identically everywhere, and `--type` scales it so
+     the page grows with the text instead of the lines getting longer. */
+  --page-base: 54rem;
+  --page: calc(var(--page-base) * var(--type));
+
+  /* The side gutter, held back from the page on both edges. Everything that
+     sits IN the page is --column wide, so nothing has to be centred against
+     anything else — they are all the same box. */
+  --gutter: 32px;
+  --column: calc(var(--page) - var(--gutter) * 2);
+
+  --rail: 46px;
+  --rail-open: 300px;
+  --ease: cubic-bezier(.22, 1, .36, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #101114;
+    --surface:   #17191d;
+    --surface-2: #202329;
+    --ink:       #e8e8e3;
+    --ink-2:     #9aa0a9;
+    --ink-3:     #6d737c;
+    --line:      #282b31;
+    --line-2:    #363a42;
+    --accent:    #4fc7a6;
+    --accent-in: #08201b;
+    --accent-sf: rgba(79, 199, 166, .12);
+    --warn:      #dd9a6d;
+    --warn-sf:   rgba(221, 154, 109, .12);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg:        #101114;
+  --surface:   #17191d;
+  --surface-2: #202329;
+  --ink:       #e8e8e3;
+  --ink-2:     #9aa0a9;
+  --ink-3:     #6d737c;
+  --line:      #282b31;
+  --line-2:    #363a42;
+  --accent:    #4fc7a6;
+  --accent-in: #08201b;
+  --accent-sf: rgba(79, 199, 166, .12);
+  --warn:      #dd9a6d;
+  --warn-sf:   rgba(221, 154, 109, .12);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+[hidden] { display: none !important; }
+
+/* ================================================================ library */
+
+.lib { min-height: 100vh; padding: 8vh 24px 120px; }
+.lib-inner { max-width: 1000px; margin: 0 auto; }
+
+.lib-head { margin-bottom: 26px; }
+.lib-head h1 {
+  font-family: var(--serif); font-weight: 500; font-size: clamp(2.2rem, 5vw, 3.1rem);
+  margin: 0; letter-spacing: -.02em;
+}
+.sub { margin: 8px 0 0; color: var(--ink-2); font-size: .95rem; }
+
+/* The composer's third home. Not floating and not docked — on this view it is
+   the primary action, so it sits in the reading order between the title and
+   the grid: here is what this is, ask something, or pick up where you left. */
+.libhost { margin-bottom: 10px; }
+.libhost .pill {
+  width: 100%;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 13px;
+  box-shadow: 0 10px 28px -24px rgba(0, 0, 0, .5);
+}
+.libhost .pill .pform { padding: 13px 15px; }
+.libhost .pill .invite { padding: 13px 15px; }
+
+.matchline {
+  min-height: 1.2em; margin-bottom: 22px;
+  font-size: .78rem; color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+
+.card {
+  display: flex; flex-direction: column; gap: 10px; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 18px 18px 14px; min-height: 138px;
+  transition: border-color .15s, transform .15s var(--ease);
+}
+.card:hover { border-color: var(--line-2); transform: translateY(-2px); }
+.card h3 {
+  margin: 0; font-family: var(--serif); font-weight: 500; font-size: 1.15rem;
+  letter-spacing: -.01em;
+}
+.card .last {
+  margin: 0; color: var(--ink-2); font-size: .875rem; line-height: 1.5; flex: 1;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.card .cmeta {
+  color: var(--ink-3); font-size: .75rem; font-variant-numeric: tabular-nums;
+  border-top: 1px solid var(--line); padding-top: 10px;
+}
+.empty { color: var(--ink-3); }
+
+/* ================================================================ session */
+
+.sess { position: fixed; inset: 0; }
+
+/* ---------------------------------------------------------- rail zones */
+
+/* The chrome, in the dimension we have to spare. Identity at the top,
+   navigation in the middle, environment at the foot — and none of it costs a
+   pixel of height, which is the dimension a laptop is short of. */
+
+.railtop, .railfoot {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px; flex-shrink: 0;
+}
+.railtop { border-bottom: 1px solid transparent; }
+.rail:hover .railtop, .rail.open .railtop { border-bottom-color: var(--line); }
+
+.railfoot {
+  flex-wrap: wrap; margin-top: auto;
+  border-top: 1px solid transparent; justify-content: center;
+}
+.rail:hover .railfoot, .rail.open .railfoot {
+  border-top-color: var(--line); justify-content: flex-start;
+}
+
+.railbtn {
+  background: none; border: 1px solid transparent; border-radius: 8px;
+  padding: 5px 9px; font-size: .85rem; color: var(--ink-2); flex-shrink: 0;
+}
+.railbtn:hover { background: var(--surface-2); color: var(--ink); }
+.railbtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+
+/* A 46px strip cannot hold text — rotated is bad and truncated is worse. The
+   ticks say where you are; the name is only wanted when you are orienting,
+   which is exactly when you would hover. */
+.rail .wide { display: none; }
+.rail:hover .wide, .rail.open .wide { display: flex; }
+.rail:hover .narrow, .rail.open .narrow { display: none; }
+
+.stitle {
+  font-weight: 500; font-size: .88rem; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.count {
+  font-size: .68rem; color: var(--ink-3); font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.env { flex-direction: column; align-items: flex-start; gap: 4px; }
+.chip {
+  color: var(--ink-3); font-family: var(--mono); font-size: .66rem;
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; white-space: nowrap;
+}
+.dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex-shrink: 0;
+}
+.rail.replay .dot { background: var(--warn); }
+
+/* ------------------------------------------------------------------- rail */
+
+.rail {
+  position: absolute; inset: 0 auto 0 0; width: var(--rail); z-index: 25;
+  display: flex; flex-direction: column;
+  background: var(--surface); border-right: 1px solid var(--line);
+  overflow: hidden; transition: width .18s var(--ease);
+}
+/* Replay is a property of the whole session, so it marks the whole rail.
+   An inset shadow rather than a border, so nothing shifts. */
+.rail.replay { box-shadow: inset -3px 0 0 var(--warn); }
+
+.railmid { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.rail:hover, .rail.open { width: var(--rail-open); box-shadow: 12px 0 32px -24px rgba(0,0,0,.5); }
+
+.ticks {
+  display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 18px 0;
+}
+.rail:hover .ticks, .rail.open .ticks { display: none; }
+.tick { width: 14px; height: 2px; border-radius: 2px; background: var(--line-2); transition: background .15s; }
+.tick.on { background: var(--accent); width: 20px; }
+
+.thread { display: none; flex-direction: column; padding: 10px 8px; overflow-y: auto; flex: 1; }
+.rail:hover .thread, .rail.open .thread { display: flex; }
+.row {
+  display: flex; gap: 10px; align-items: baseline; text-align: left; width: 100%;
+  background: none; border: 0; border-radius: 8px; padding: 9px 10px; color: var(--ink-2);
+}
+.row:hover { background: var(--surface-2); color: var(--ink); }
+.row.on { background: var(--accent-sf); color: var(--ink); }
+.row.on .n { color: var(--accent); }
+.row .n { font-family: var(--mono); font-size: .68rem; color: var(--ink-3); }
+.row .label {
+  font-size: .82rem; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ------------------------------------------------------- deck and panels */
+
+/* Full viewport height: there is no bar above it any more. */
+.deck {
+  position: absolute; inset: 0 0 0 var(--rail);
+  overflow: hidden;
+}
+.panel {
+  position: absolute; inset: 0;
+  transition: transform .26s var(--ease);
+  will-change: transform;
+}
+.deck.no-anim .panel { transition: none; }
+
+/* ------------------------------------------------------------- columns */
+
+/* Two columns, only ever when the whole page fits — see fit.ts. The width was
+   always there: at 1440px, two columns at the natural reading measure plus a
+   gutter come to about 1290px, so this is using the page at the size the type
+   was designed for rather than cramming it into strips. */
+.doc.cols-2 {
+  /* A scrolling page wants air before it starts; a page that fits is a fixed
+     frame, like a printed one, and should use it. */
+  padding-top: 2.4vh;
+  /* And no air at the foot either: the dock below carries its own, and in a
+     fixed frame every reclaimed pixel is a pixel of page that fits. */
+  padding-bottom: .4rem;
+  /* Columns divide the page between them, each landing near a comfortable
+     line length on its own. */
+  column-count: 2;
+  column-gap: 3.2rem;
+  column-rule: 1px solid var(--line);
+  max-width: none;
+}
+
+/* The claim belongs to the whole page, not to the left half. */
+.doc.cols-2 > h1 { column-span: all; }
+
+/* A metrics row or a table sliced down the middle is worse than any amount of
+   scrolling, so nothing that is a THING may be cut — only prose may flow. */
+.doc.cols-2 > * { break-inside: avoid; }
+.doc.cols-2 > p { break-inside: auto; orphans: 2; widows: 2; }
+.doc.cols-2 > h2 { break-after: avoid; }
+
+/* A page that fits has no end to be pushed past, so the dock stops reserving
+   room for the push and tightens up. Every pixel it gives back is a pixel of
+   page that fits. */
+.sheet.fits .dock { padding-bottom: 1rem; }
+.sheet.fits .pill.docked { padding-top: 10px; }
+.sheet.fits { overflow-y: hidden; }
+
+/* The internal scroller. `overscroll-behavior: contain` stops a boundary
+   scroll leaking to the document and bouncing the whole app. */
+/* `both-edges` is the whole reason the text and the composer used to disagree.
+   The scroller's scrollbar eats width from the RIGHT only, so anything centred
+   inside .sheet sat half a scrollbar left of centre — while the composer, which
+   lives outside the scroller in .floathost, stayed centred on the full deck.
+   Reserving the gutter on BOTH edges keeps the content box concentric with the
+   scroller, so the two centres coincide whether or not the page scrolls. */
+.sheet {
+  height: 100%; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-gutter: stable both-edges;
+}
+/* `.doc` sets the base size and everything inside it is `em`, so one dial
+   moves the whole document and nothing outside it. */
+/* TEXT keeps the measure; everything else fills the page.
+   Half the deck was empty — 653px of page against 741px of nothing — and the
+   cause was capping figures, charts and tables at a READING width they have no
+   use for. A figure has no measure. That one asymmetry is most of what makes a
+   page look composed rather than dumped, and it costs prose nothing. */
+.doc {
+  max-width: var(--page);
+  margin: 0 auto; padding: 7vh var(--gutter) 2rem;
+  font-size: calc(1rem * var(--type));
+}
+
+/* Nothing is capped and nothing is centred inside the page any more: every
+   block simply fills the column, so a paragraph and the table under it start
+   and end on the same two vertical lines. Block rules below still set
+   margin-top/margin-bottom rather than the `margin:` shorthand — a shorthand
+   would reset the side margins too, which is what silently broke the centring
+   when the widths were still different. */
+
+/* --------------------------------------------------------------- blocks */
+
+.doc h1 {
+  font-family: var(--serif); font-weight: 500; font-size: 2.3em;
+  line-height: 1.18; letter-spacing: -.02em; text-wrap: balance;
+  margin-top: 0; margin-bottom: 1.1rem;
+}
+
+/* A section break, not a second headline. Much more space above than below,
+   so it binds to the text it introduces rather than floating between two
+   paragraphs — and a hairline, so a long page reads as movements. */
+.doc h2 {
+  font-family: var(--serif); font-weight: 500; font-size: 1.32em;
+  line-height: 1.3; letter-spacing: -.01em; text-wrap: balance;
+  margin-top: 2.8rem; margin-bottom: .9rem;
+  padding-top: 1.5rem; border-top: 1px solid var(--line);
+}
+.doc h1 + h2 { margin-top: 1.4rem; padding-top: 0; border-top: 0; }
+
+/* The lead. The first paragraph after the claim carries the summary — the
+   agent already writes it that way without being asked, so the renderer can
+   set it without adding anything to the vocabulary. */
+.doc h1 + p {
+  font-size: 1.19em; line-height: 1.62; color: var(--ink-2);
+  text-wrap: pretty; margin-bottom: 1.5rem;
+}
+.doc p {
+  font-size: 1.0625em; line-height: 1.72; color: var(--ink);
+  margin-top: 0; margin-bottom: 1.15rem;
+}
+.doc strong { font-weight: 600; }
+.doc ul { margin-top: 0; margin-bottom: 1.3rem; padding-left: 1.1rem; }
+.doc li { font-size: 1em; line-height: 1.7; margin-bottom: .4rem; }
+
+/* Quotes and notes are meant to INTERRUPT. In paragraph rhythm they read as
+   just another block, which is the opposite of their job. */
+.doc blockquote {
+  margin-top: 2.5rem; margin-bottom: 2.5rem;
+  padding: 2px 0 2px 20px; border-left: 2px solid var(--accent);
+  font-family: var(--serif); font-style: italic; font-size: 1.25em; line-height: 1.5;
+  color: var(--ink);
+}
+
+.doc code.tok {
+  font-family: var(--mono); font-size: .86em;
+  background: var(--surface-2); border-radius: 4px; padding: .12em .34em;
+}
+
+/* The frame draws itself and clips nothing — a scroll container clips its own
+   descendants, and the gutter rule that marks this block is one of them. So the
+   <pre> keeps the border and the background, and the <code> inside it does the
+   scrolling and carries the padding. The inner radius is the outer one less the
+   1px border, so long lines round off against the frame instead of squaring
+   its corners. */
+.doc .code {
+  margin-top: 0; margin-bottom: 1.3rem;
+  border-radius: 9px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  font-family: var(--mono); font-size: .82em; line-height: 1.6;
+}
+.doc .code > code {
+  display: block; overflow-x: auto; border-radius: 8px;
+  padding: 14px 16px; scrollbar-width: thin;
+}
+
+.doc .note {
+  margin-top: 1.9rem; margin-bottom: 1.9rem;
+  padding: 12px 15px; border-radius: 9px; font-size: .92em; line-height: 1.6;
+  background: var(--accent-sf); border-left: 2px solid var(--accent);
+}
+.doc .note.warn { background: var(--warn-sf); border-left-color: var(--warn); }
+
+.doc .pagelink {
+  /* Block-level, so it starts at the column's left edge like every other
+     block; `fit-content` keeps the pill itself only as wide as its words. */
+  display: flex; width: fit-content; align-items: center; gap: 7px;
+  margin-top: 0; margin-bottom: 1.3rem;
+  margin-left: 0; margin-right: auto;
+  background: none; border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 7px 15px; font-size: .85em; color: var(--accent);
+}
+.doc .pagelink::after { content: "→"; }
+.doc .pagelink:hover { border-color: var(--accent); background: var(--accent-sf); }
+
+.metrics { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 1.5rem; }
+.metric {
+  flex: 1 1 130px; display: flex; flex-direction: column; gap: 4px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 15px;
+}
+.metric .v {
+  font-size: 1.5em; font-weight: 500; letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.metric .k { font-size: .73em; color: var(--ink-2); text-transform: uppercase; letter-spacing: .07em; }
+.metric.up { border-color: var(--accent); background: var(--accent-sf); }
+.metric.up .v { color: var(--accent); }
+
+.chartwrap { margin: 0 0 1.6rem; }
+.chart {
+  display: flex; align-items: flex-end; gap: 6px; height: 168px;
+  padding: 12px 14px 0; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.chart .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; gap: 6px; }
+.chart i { display: block; background: var(--line-2); border-radius: 3px 3px 0 0; transition: height .3s var(--ease); }
+.chart i.hi { background: var(--accent); }
+.chart .cl {
+  font-size: .64em; color: var(--ink-3); text-align: center; padding-bottom: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chartwrap figcaption { margin-top: 9px; font-size: .78em; color: var(--ink-2); }
+
+.tablewrap { margin-top: 0; margin-bottom: 1.5rem; border: 1px solid var(--line); border-radius: 10px; }
+.tablewrap .tscroll { overflow-x: auto; border-radius: 9px; scrollbar-width: thin; }
+.doc table { border-collapse: collapse; width: 100%; font-size: .89em; }
+.doc th, .doc td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.doc th {
+  font-size: .7em; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--ink-2); background: var(--surface); font-weight: 500;
+}
+.doc td { font-variant-numeric: tabular-nums; }
+.doc tr:last-child td { border-bottom: 0; }
+
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 1.5rem; }
+.split .pane {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 17px;
+}
+.split .pane h4 { margin: 0 0 8px; font-size: .78em; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-2); }
+.split .pane p { margin: 0; font-size: .93em; line-height: 1.6; }
+
+.flow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 1.5rem; }
+.flow .step {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 13px; font-size: .84em; font-family: var(--mono);
+}
+.flow .step.warn { border-color: var(--warn); color: var(--warn); background: var(--warn-sf); }
+.flow .to { color: var(--ink-3); }
+
+@media (max-width: 620px) {
+  :root { --gutter: 20px; }
+  .split { grid-template-columns: 1fr; }
+  .doc { padding-top: 5vh; }
+  .doc h1 { font-size: 1.95em; }
+}
+
+/* ----------------------------------------------------------- composer */
+
+/* The composer is ONE element in two homes. Floating, it is a small raised
+   pill over the page; docked, it flattens into a rule at the end of the
+   document and stops looking like an overlay at all. Both are the same node,
+   moved — so there is never a floating button competing with an inline link. */
+
+.floathost {
+  position: absolute; left: var(--rail); right: 0; bottom: 0; z-index: 28;
+  display: flex; justify-content: center; padding: 0 var(--gutter) 26px;
+  pointer-events: none;
+}
+.floathost > * { pointer-events: auto; }
+
+.pill {
+  /* The column, not a number of its own. The composer is the thing you type
+     into beside what you read, so it is exactly as wide as what you read —
+     and it follows the page dials rather than drifting away from them. */
+  width: min(var(--column), 100%);
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 13px;
+  padding: 6px;
+  box-shadow: 0 14px 34px -24px rgba(0, 0, 0, .6);
+  transition: border-color .15s, box-shadow .18s var(--ease);
+}
+.pill:focus-within { border-color: var(--accent); }
+
+/* Docked: no card, no shadow — it reads as the last line of the page. */
+.dock { padding: 0 var(--gutter) 26vh; }
+/* The same box as the page, gutter included — `box-sizing: border-box` means
+   the padding eats into the cap, so the pill inside lands exactly on --column,
+   which is where the last paragraph above it ends. */
+.dock { max-width: var(--page); margin: 0 auto; }
+.pill.docked {
+  width: 100%; background: none; border: 0; border-top: 1px solid var(--line);
+  border-radius: 0; box-shadow: none; padding: 14px 0 0;
+}
+
+/* --- state: idle ------------------------------------------------------- */
+
+.pill .invite {
+  display: flex; align-items: center; gap: 9px;
+  background: none; border: 0; border-radius: 9px; padding: 9px 12px;
+  font-size: .88rem; color: var(--ink-2); text-align: left; width: 100%;
+}
+.pill .invite:hover { background: var(--surface-2); color: var(--ink); }
+.pill.docked .invite { padding-left: 0; color: var(--accent); }
+.pill.docked .invite:hover { background: none; text-decoration: underline; }
+.pill kbd {
+  margin-left: auto; font-family: var(--mono); font-size: .68rem; color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
+}
+.pill.docked kbd { margin-left: 12px; }
+
+/* --- state: open ------------------------------------------------------- */
+
+.pill .pform { display: none; align-items: center; gap: 10px; padding: 9px 12px; }
+.pill .pform input {
+  flex: 1; background: none; border: 0; outline: none; font: inherit; color: var(--ink);
+}
+.pill .pform input::placeholder { color: var(--ink-3); }
+.pill .enter { color: var(--ink-3); font-family: var(--mono); font-size: .78rem; }
+
+/* --- state: busy ------------------------------------------------------- */
+
+.pill .work {
+  display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; font-family: var(--mono); font-size: .72rem;
+}
+.pill .cmd {
+  flex: 1; min-width: 0; color: var(--accent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pill .cmd.bad { color: var(--warn); }
+.pill .stop {
+  background: none; border: 1px solid var(--line-2); border-radius: 6px;
+  color: var(--ink-3); font-size: .6rem; line-height: 1; padding: 5px 7px;
+}
+.pill .stop:hover { border-color: var(--warn); color: var(--warn); }
+.pill .out {
+  flex-basis: 100%; margin: 0; color: var(--ink-3);
+  white-space: pre-wrap; word-break: break-all; max-height: 2.6em; overflow: hidden;
+}
+
+.pill .pstatus {
+  min-height: 1.05em; padding: 0 12px 4px; font-size: .74rem; color: var(--ink-3);
+  text-align: center;
+}
+.pill.docked .pstatus { text-align: left; padding-left: 0; }
+.pill .pstatus.work { color: var(--accent); }
+.pill .pstatus.bad { color: var(--warn); }
+.pill .pstatus:empty { display: none; }
+
+.pill[data-state="open"] .invite,
+.pill[data-state="busy"] .invite { display: none; }
+.pill[data-state="open"] .pform { display: flex; }
+.pill[data-state="busy"] .work { display: flex; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+/* -------------------------------------------------------------- figures */
+
+/* The sanitiser guarantees a viewBox and strips author width/height, so the
+   drawing scales to whatever the layout mode gives it. `currentColor` and the
+   palette tokens resolve here, against the page's own cascade — which only
+   works because the SVG is inlined rather than sitting in an <img>. */
+.doc .figure { margin: 0 0 1.6rem; color: var(--ink); }
+.doc .svgwrap {
+  overflow: hidden; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--line); padding: 18px;
+}
+.doc .svgwrap svg { display: block; width: 100%; height: auto; }
+.doc .figure figcaption { margin-top: 9px; font-size: .78em; color: var(--ink-2); }
+
+/* ---------------------------------------------------------- layout modes */
+
+.doc.lay-column { }                                    /* the default page */
+
+/* These used to differ by how far components BROKE OUT of the reading measure.
+   There is no measure to break out of now, so a wider page is simply a wider
+   page: text and figures widen together instead of one leaving the other
+   behind. The composer keeps the default column on these — it lives outside
+   the page and cannot see which layout the page chose — so on a wide page it
+   is narrower than the text rather than misaligned with it. */
+.doc.lay-wide { --page: calc(64rem * var(--type)); }
+
+/* The one layout that is still an arrangement rather than a width: prose down
+   the left, figures down the right. The tracks are fractions now, not a fixed
+   reading measure, so the prose track scales with the page like everything
+   else. Below the breakpoint it stacks and the fractions never apply. */
+.doc.lay-split { --page: calc(72rem * var(--type)); }
+@media (min-width: 1100px) {
+  .doc.lay-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    column-gap: 40px;
+    align-items: start;
+  }
+  .doc.lay-split > h1 { grid-column: 1 / -1; }
+  .doc.lay-split > .figure,
+  .doc.lay-split > .chartwrap,
+  .doc.lay-split > .tablewrap { grid-column: 2; }
+}
+
+/* Figures at full width, prose between them as connective tissue. Wider than
+   the default page because the figures are the point of this one. */
+.doc.lay-gallery { --page: calc(66rem * var(--type)); }
+.doc.lay-gallery > .figure { margin-bottom: 2.4rem; }
+.doc.lay-gallery > .figure .svgwrap { padding: 28px; }
+
+/* ------------------------------------------------------- reader settings */
+
+.chipbtn { font-family: var(--sans); cursor: pointer; }
+.chipbtn:hover { border-color: var(--line-2); color: var(--ink); }
+.chipbtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+
+.prefs {
+  position: absolute; bottom: 14px; left: calc(var(--rail-open) + 12px); z-index: 40;
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px;
+  padding: 14px; min-width: 250px;
+  box-shadow: 0 18px 40px -26px rgba(0, 0, 0, .65);
+}
+.prow { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.prow > span { font-size: .8rem; color: var(--ink-2); white-space: nowrap; }
+
+.seg { display: flex; background: var(--surface-2); border-radius: 8px; padding: 2px; }
+.seg button {
+  background: none; border: 0; border-radius: 6px; padding: 5px 9px;
+  font-size: .74rem; color: var(--ink-2); line-height: 1.4;
+}
+.seg button:hover { color: var(--ink); }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.14); }
+
+/* Italic stresses a word; bold names one. Serif faces carry a true italic, so
+   this is a real cut rather than a synthesised slant. */
+.doc em { font-style: italic; }
+
+/* ------------------------------------------------------------- the aim */
+
+/* What the question is pointing at. The anchor has always travelled with the
+   turn — the agent knew which block — but the reader was never told, so there
+   was no reason to believe that asking beside a paragraph differed from asking
+   at the foot of the page. A rule in the gutter says it does.
+
+   ONE mark, two states. Hovering is a rehearsal of anchoring, so it happens in
+   the same place, at the same size, in the neutral colour — the rule slides
+   from grey to accent when the aim is taken, rather than one hint appearing
+   beside the text and a different one replacing it out in the gutter. It lives
+   on every block from the start so it can fade rather than snap. */
+.doc > * { position: relative; }
+.doc > *::before {
+  content: ""; position: absolute; left: -16px; top: 1px; bottom: 1px;
+  width: 2px; border-radius: 2px; background: var(--line-2);
+  opacity: 0; transition: opacity .14s var(--ease);
+  pointer-events: none;
+}
+.doc.cols-2 > *::before { left: -11px; }
+
+/* Everything in a page is pointable while the composer is open, so it should
+   look it — but only then, and only just. */
+.sess:has(.pill[data-state="open"]) .doc > *:not(.anchored):hover::before { opacity: 1; }
+
+.doc > .anchored::before {
+  background: var(--accent); opacity: 1;
+  animation: aimin .18s var(--ease);
+}
+@keyframes aimin { from { opacity: 0; transform: scaleY(.4); } }
+
+/* Code blocks and tables used to be the exceptions here — they scrolled, so
+   they clipped, so they showed no mark at all when anchored. The scrolling now
+   happens one level in (see .code > code and .tablewrap .tscroll), which leaves
+   every block in the page marked the same way. */
+
+.pill .aim {
+  padding: 8px 12px 0; font-size: .72rem; color: var(--accent);
+  letter-spacing: .02em;
+}
+.pill.docked .aim { padding-left: 0; }
+.pill[data-state="idle"] .aim { display: none; }
+.pill[data-state="busy"] .aim { color: var(--ink-2); font-style: italic; }
+
+/* --------------------------------------------------------------- next */
+
+/* Doors, not buttons. The page has just ended; these are quiet enough to be
+   ignored and specific enough to be worth clicking. */
+.doc .next {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 2px; margin-top: 2.2rem; margin-bottom: 0; padding-top: 1.4rem;
+  border-top: 1px solid var(--line);
+}
+.doc.cols-2 > .next { column-span: all; }
+
+.doc .nextq {
+  display: flex; align-items: baseline; gap: 10px; text-align: left; width: 100%;
+  background: none; border: 0; border-radius: 8px;
+  padding: 8px 10px 8px 0; font-size: .95em; line-height: 1.5; color: var(--ink-2);
+  transition: color .12s, padding-left .14s var(--ease);
+}
+.doc .nextq::before { content: "→"; color: var(--ink-3); flex-shrink: 0; }
+.doc .nextq:hover { color: var(--accent); padding-left: 6px; }
+.doc .nextq:hover::before { color: var(--accent); }
+
+/* A door that was taken now leads to the room it built. */
+.doc .nextq.taken { color: var(--accent); }
+.doc .nextq.taken::before { content: "↳"; color: var(--accent); }
+
+/* And its siblings become the record of a fork: readable, not clickable. */
+.doc .nextq.spent { color: var(--ink-3); cursor: default; opacity: .75; }
+.doc .nextq.spent::before { content: "·"; }
+.doc .nextq.spent:hover { color: var(--ink-3); padding-left: 0; }

@@ -1,0 +1,16 @@
+{
+  "name": "@perpetual/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@perpetual/shared": "workspace:*"
+  },
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=esm --outfile=dist/main.js --target=es2022",
+    "watch": "pnpm build --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
