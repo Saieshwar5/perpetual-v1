@@ -54,6 +54,17 @@ export interface Anchor {
   page: string;
   /** Index of the block the reader was looking at, when known. */
   index?: number;
+  /**
+   * The block's own id, when it has one. Both are carried because they answer
+   * different questions: `index` is where it was, `id` is what it was.
+   *
+   * The composer HOLDS an anchor while the reader types, so a page the agent
+   * rewrites mid-sentence used to leave the anchor pointing at whatever slid
+   * into that slot. An id survives the rewrite — the client re-resolves the
+   * index from it, and the agent is told the name rather than a position that
+   * may already have moved.
+   */
+  id?: string;
 }
 
 export interface Problem {

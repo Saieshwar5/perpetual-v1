@@ -58,7 +58,21 @@ export interface BlockActions {
   answered?: (question: string) => string | null;
 }
 
+/**
+ * Render one block, and stamp its name onto the node when it has one.
+ *
+ * The stamp is what lets everything else address a block without counting:
+ * the ops from a keyed page find their node by name, and a held anchor
+ * re-resolves through it after the agent has moved things around. One place
+ * does it, so no case in the switch below has to remember to.
+ */
 export function renderBlock(b: Block, on: BlockActions = {}): HTMLElement {
+  const node = buildBlock(b, on);
+  if (b.id) node.dataset.blockId = b.id;
+  return node;
+}
+
+function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
   switch (b.kind) {
     case "heading":
       return el("h1", undefined, b.text);

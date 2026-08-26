@@ -56,7 +56,42 @@ default page: `"wide"` (a wider page — text and figures both), `"split"`
 (prose left, figures right on a wide screen), or `"gallery"` (big figures,
 prose between). The default is `"column"` and is right for almost everything.
 
+## Naming blocks
+
+Any block may carry an `id` — a name for that block, unique within its page:
+
+```json
+{"kind":"chart","id":"margin-trend","values":[3,7,12,9],"caption":"Margin by quarter"}
+```
+
+**Name every block on a page, or none.** A page where every block is named is
+updated block by block: change one line and the reader sees that one block
+change, keeping their scroll position and everything else on the page exactly
+as it was. A page with even one unnamed block is rebuilt whole on any change —
+the reader is thrown back to the top and every block is redrawn.
+
+Names are lowercase letters, digits and dashes (`lead`, `cost-table`,
+`step-2`), and they should say what the block IS, not where it sits: `summary`
+survives being moved down the page, `block-3` does not.
+
+This is what makes amending cheap. To fix a number in one paragraph of a
+written page, rewrite only the line whose `id` is that paragraph:
+
+```bash
+# replace one named line, leave the rest of the page untouched
+grep -v '"id":"lead"' page.ndjson > /tmp/p
+# ... write the corrected line into /tmp/p in the same position ...
+mv /tmp/p ui/pages/003-margins/page.ndjson
+```
+
+When the user asks about a block you named, you are told its name. Rewriting
+that one line is almost always the right answer — it is faster for you and it
+does not disturb the reader.
+
 ## The blocks
+
+Every shape below may also carry `"id"`. It is left out of the examples to keep
+them readable.
 
 | kind | shape |
 |---|---|
