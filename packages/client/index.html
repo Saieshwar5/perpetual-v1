@@ -136,22 +136,18 @@
 </section>
 
   <div class="pill" id="pill" data-state="idle">
-    <!-- The hairline. Not an "Ask" button: it says where you are in the site,
-         and clicking it is how you ask. One element, two jobs — and no chrome
-         asking to be noticed while saying nothing. -->
-    <button class="invite" type="button" aria-label="Ask a question">
-      <span class="pos"></span>
-      <kbd>⌘K</kbd>
-    </button>
-
     <!-- What the question points at, and the way to stop pointing at it. -->
     <div class="aim" hidden>
       <span class="aimtext"></span>
       <button class="aimoff" type="button" aria-label="Ask about the page instead">×</button>
     </div>
 
+    <!-- Always a field, never a button that hides one. It is SHORT when there
+         is nothing to say to it and grows when there is — but a reader must
+         always be able to see the place where they type. -->
     <form class="pform">
       <input type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Ask">
+      <span class="pos"></span>
       <span class="enter">↵</span>
     </form>
 

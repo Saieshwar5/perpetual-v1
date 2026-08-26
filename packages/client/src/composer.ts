@@ -27,12 +27,15 @@
  */
 export type ComposerState = "idle" | "open" | "busy";
 
+/** Long enough that a pointer merely passing over the bottom edge never grows it. */
+const HOVER_MS = 130;
+
 export class Composer {
   readonly root: HTMLElement;
   private floatHost: HTMLElement;
   private input: HTMLInputElement;
   private form: HTMLFormElement;
-  private invite: HTMLButtonElement;
+
   private aimEl: HTMLElement;
   private aimText: HTMLElement;
   private posEl: HTMLElement;
@@ -44,6 +47,16 @@ export class Composer {
   private statusEl: HTMLElement;
   private state: ComposerState = "idle";
   private wantsCompact = true;
+  /**
+   * The pointer is resting ON the composer.
+   *
+   * Different from the pointer crossing the page, which must never grow
+   * anything — that is the jumpiness worth avoiding. Moving onto the composer
+   * is an intention, and the short delay is what tells the two apart: a
+   * pointer travelling past the bottom edge is gone before it fires.
+   */
+  private hovering = false;
+  private hoverTimer: number | undefined;
 
   onSubmit: (text: string) => void = () => {};
   onStop: () => void = () => {};
@@ -58,7 +71,7 @@ export class Composer {
   constructor(root: HTMLElement, floatHost: HTMLElement) {
     this.root = root;
     this.floatHost = floatHost;
-    this.invite = root.querySelector(".invite")!;
+
     this.form = root.querySelector(".pform")!;
     this.input = root.querySelector("input")!;
     this.aimEl = root.querySelector(".aim")!;
@@ -71,7 +84,6 @@ export class Composer {
     this.outEl = root.querySelector(".out")!;
     this.statusEl = root.querySelector(".pstatus")!;
 
-    this.invite.addEventListener("click", () => this.open());
     root.querySelector(".stop")!.addEventListener("click", () => this.onStop());
     root.querySelector(".aimoff")!.addEventListener("click", (e) => {
       e.stopPropagation();          // the aim is dropped; the composer stays open
@@ -93,6 +105,19 @@ export class Composer {
 
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { e.stopPropagation(); this.close(); }
+    });
+    // Clicking into the field IS opening it, now that there is no button in
+    // front of it. `open()` focuses, so the guard stops it recursing.
+    this.input.addEventListener("focus", () => { if (this.state === "idle") this.open(); });
+
+    root.addEventListener("pointerenter", () => {
+      clearTimeout(this.hoverTimer);
+      this.hoverTimer = setTimeout(() => { this.hovering = true; this.paint(); },
+        HOVER_MS) as unknown as number;
+    });
+    root.addEventListener("pointerleave", () => {
+      clearTimeout(this.hoverTimer);
+      if (this.hovering) { this.hovering = false; this.paint(); }
     });
     this.input.addEventListener("input", () => this.onType(this.input.value));
 
@@ -272,7 +297,10 @@ export class Composer {
 
   private paint() {
     this.root.dataset.state = this.state;
-    // Full whenever there is something to do or say; hairline otherwise.
-    this.root.dataset.size = this.wantsCompact && this.state === "idle" ? "min" : "full";
+    // Short only when there is nothing to say to it: no block pointed at, not
+    // at the end of the site, not focused, no turn running, and the pointer
+    // somewhere else.
+    const small = this.wantsCompact && this.state === "idle" && !this.hovering;
+    this.root.dataset.size = small ? "min" : "full";
   }
 }

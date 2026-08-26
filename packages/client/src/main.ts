@@ -438,6 +438,9 @@ async function showLibrary(opts: { focus?: boolean } = {}) {
   // The composer comes with us. On this view it is the primary action, so it
   // opens rather than waiting to be invoked.
   composer.setHome(libHost);
+  // Never short here: on the library there is no page to be quiet about, and
+  // asking is the only thing to do.
+  composer.compact(false);
   composer.placeholder("Ask anything — or type to find an earlier session");
   composer.clear();
   if (opts.focus !== false) composer.open();

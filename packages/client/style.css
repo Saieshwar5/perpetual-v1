@@ -147,8 +147,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .libhost .pill { border: 1px solid var(--line-2); border-radius: 13px; padding: 6px; }
 .libhost .pill .pform { display: flex; padding: 13px 15px; }
-.libhost .pill .invite { display: none; }
-.libhost .pill .invite { padding: 13px 15px; }
+
 
 .matchline {
   min-height: 1.2em; margin-bottom: 22px;
@@ -535,15 +534,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: flex; justify-content: center; padding: 0 var(--gutter) 26px;
   pointer-events: none;
 }
-/* The page has to stop before the composer does, or a hairline with no card
-   behind it has text running straight through it. A card would have occluded
-   it — that is what the old raised pill was doing — but a card is the thing we
-   are trying not to have on the page. So the page fades out instead. */
+/* The page has to stop before the composer does, so it fades out behind it.
+   THE SCRIM MUST STAY BEHIND THE COMPOSER, and that takes a z-index on the
+   composer rather than on the scrim: within one stacking context a POSITIONED
+   descendant paints above a non-positioned one, whatever the source order, so
+   this absolutely-positioned pseudo-element was painting straight over a
+   `position: static` pill. The composer lost its border, its background and
+   most of the contrast of whatever the reader had typed — it looked like the
+   input had disappeared, and it very nearly had. */
 .floathost::before {
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 130px;
   background: linear-gradient(to top, var(--bg) 0%, var(--bg) 52%, transparent 100%);
   pointer-events: none;
+  z-index: 0;
 }
+.floathost > .pill { position: relative; z-index: 1; }
 .floathost > * { pointer-events: auto; }
 
 .pill {
@@ -557,34 +562,31 @@ button { font: inherit; color: inherit; cursor: pointer; }
   box-shadow: 0 14px 34px -24px rgba(0, 0, 0, .6);
   transition: border-color .15s, box-shadow .18s var(--ease);
 }
-/* THE HAIRLINE. The page is what matters; a permanent input box is what makes
-   something look like a chat. So mid-page the composer is a rule with the page
-   number on it, and it grows only when there is a reason: a block pointed at,
-   a turn running, or the end of the last page. Never on hover — a box that
-   inflates as the pointer crosses it is jumpy. */
+/* SHORT, never hidden. The page is what matters and a tall permanent input is
+   what makes something look like a chat — but a reader must always be able to
+   SEE where they type, so resting is a real field with a real border that is
+   simply short and quiet. It grows when there is a reason: a block pointed at,
+   the pointer resting on it, a turn running, or the end of the last page. */
+.pill[data-state="idle"] .pform,
+.pill[data-state="open"] .pform { display: flex; }
+
 .pill[data-size="min"] {
-  background: none;
-  border: 0; border-top: 1px solid var(--line);
-  border-radius: 0;
+  background: var(--surface);
+  /* The stronger line, not the page's hairline: this is a control, and the
+     complaint that started this was not being able to find it at all. */
+  border-color: var(--line-2);
   box-shadow: none;
   padding: 0;
-  transition: border-color .15s, opacity .15s;
 }
-.pill[data-size="min"] .invite {
-  justify-content: center; gap: 10px;
-  padding: 7px 12px; font-size: .72rem; color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-.pill[data-size="min"] kbd { margin-left: 0; opacity: .5; }
-.pill[data-size="min"]:hover { border-top-color: var(--line-2); }
-.pill[data-size="min"]:hover .invite { color: var(--ink-2); }
-.pill[data-size="min"]:hover kbd { opacity: 1; }
+.pill[data-size="min"] .pform { padding: 5px 13px; }
+.pill[data-size="min"] .pform input { font-size: .84rem; }
+.pill[data-size="min"] .enter { opacity: .5; }
 
-/* Full and idle means the reader is expected to type, so the field is already
-   there rather than behind one more click. */
-.pill[data-size="full"][data-state="idle"] .pform { display: flex; }
-.pill[data-size="full"][data-state="idle"] .invite { display: none; }
-.pill[data-size="full"] .pos { display: none; }
+/* Where the reader is in the site, at the quiet end of the field. */
+.pill .pos {
+  font-size: .68rem; color: var(--ink-3); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .pill:focus-within {
   border-color: var(--accent);
   box-shadow: 0 14px 34px -24px rgba(0, 0, 0, .6);
@@ -601,13 +603,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 
 /* --- state: idle ------------------------------------------------------- */
-
-.pill .invite {
-  display: flex; align-items: center; gap: 9px;
-  background: none; border: 0; border-radius: 9px; padding: 9px 12px;
-  font-size: .88rem; color: var(--ink-2); text-align: left; width: 100%;
-}
-.pill .invite:hover { background: var(--surface-2); color: var(--ink); }
 .pill kbd {
   margin-left: auto; font-family: var(--mono); font-size: .68rem; color: var(--ink-3);
   border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
@@ -680,9 +675,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pill .retry:hover { background: var(--warn-sf); }
 .pill .pstatus:empty { display: none; }
 
-.pill[data-state="open"] .invite,
-.pill[data-state="busy"] .invite { display: none; }
-.pill[data-state="open"] .pform { display: flex; }
+.pill[data-state="busy"] .pform { display: none; }
 .pill[data-state="busy"] .work { display: flex; }
 
 @media (prefers-reduced-motion: reduce) {
