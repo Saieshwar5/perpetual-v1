@@ -20,9 +20,10 @@ import { Deck } from "./deck.ts";
 import { Rail } from "./rail.ts";
 import { Composer } from "./composer.ts";
 import { mountSettings, load as loadSettings } from "./settings.ts";
-import { fitAll } from "./fit.ts";
+import { fitAll, measureDeck } from "./fit.ts";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
 import type { Anchor, Page, Selection, Site, SessionIndex } from "@perpetual/shared/site";
+import type { RenderReport } from "@perpetual/shared/render";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -177,6 +178,45 @@ function repaintControls() {
       doc.children[i]?.replaceWith(renderBlock(b, acts));
     }
   }
+}
+
+/**
+ * Tell the agent what its page turned out to look like.
+ *
+ * The one signal that never existed. The agent writes blocks and finds out
+ * whether they PARSE; it has never found out whether they fit. This measures
+ * the deck as it currently stands and posts it to the running turn, where the
+ * controller turns it into a note in the agent's next tool result — the same
+ * channel a validation problem already arrives in, so the agent reads it where
+ * it is already reading and can act on it before the turn ends.
+ *
+ * Only while a turn is running, and debounced: a page is written a block at a
+ * time, and measuring a half-written page would report a paragraph as a page.
+ * The settle is longer than the watcher's poll, so what gets measured is a
+ * page that has stopped growing rather than one caught mid-sentence.
+ */
+const REPORT_SETTLE_MS = 400;
+let reportTimer: number | undefined;
+
+function reportRender() {
+  if (!sessionId || !turn) return;
+  const { width, pages: measured } = measureDeck(deckHost, loadSettings().columns !== "off");
+  if (!measured.length) return;
+  const report: RenderReport = { width, type: loadSettings().type, pages: measured };
+  // Fire and forget. This is advice for the agent, not part of the turn: a
+  // failed report must never disturb the page the reader is watching.
+  void fetch(`/sessions/${sessionId}/rendered`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(report),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function scheduleReport() {
+  if (!turn) return;
+  clearTimeout(reportTimer);
+  reportTimer = setTimeout(reportRender, REPORT_SETTLE_MS) as unknown as number;
 }
 
 function refit() {
@@ -450,6 +490,10 @@ async function startSession(): Promise<string> {
 /* ------------------------------------------------------------------- turn */
 
 function handle(ev: WireEvent) {
+  // Anything that changes what a page looks like is worth re-measuring — the
+  // agent is told about the page as it stands, not as it was when it opened.
+  if (ev.type.startsWith("page_")) scheduleReport();
+
   switch (ev.type) {
     case "text_delta":
       // Prose between tool calls is status, never content. The user's answer

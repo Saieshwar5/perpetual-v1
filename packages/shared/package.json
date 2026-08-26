@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./blocks": "./src/blocks.ts",
     "./site": "./src/site.ts",
-    "./events": "./src/events.ts"
+    "./events": "./src/events.ts",
+    "./render": "./src/render.ts"
   }
 }
