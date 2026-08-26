@@ -10,7 +10,8 @@
     "watch": "pnpm --filter @perpetual/client watch",
     "test": "pnpm --filter @perpetual/controller test",
     "typecheck": "pnpm -r exec tsc --noEmit",
-    "models": "pnpm --filter @perpetual/controller models"
+    "models": "pnpm --filter @perpetual/controller models",
+    "report": "pnpm --filter @perpetual/controller report"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --experimental-strip-types --env-file-if-exists=../../.env src/server.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
-    "models": "node --experimental-strip-types src/models.ts"
+    "models": "node --experimental-strip-types src/models.ts",
+    "report": "node --experimental-strip-types src/report-cli.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.3",
