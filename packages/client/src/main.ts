@@ -21,6 +21,7 @@ import { Rail } from "./rail.ts";
 import { Composer } from "./composer.ts";
 import { mountSettings, load as loadSettings } from "./settings.ts";
 import { fitAll, measureDeck } from "./fit.ts";
+import { describeCommand, activityLine } from "./activity.ts";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
 import type { Anchor, Page, Selection, Site, SessionIndex } from "@perpetual/shared/site";
 import type { RenderReport } from "@perpetual/shared/render";
@@ -230,9 +231,13 @@ function paintRail() {
   countEl.textContent = pages.length ? `${deck.index + 1} / ${pages.length}` : "";
 }
 
-deck.onChange = (i) => {
+deck.onChange = (i, id) => {
   rail.setActive(i);
   countEl.textContent = pages.length ? `${i + 1} / ${pages.length}` : "";
+  // Moving to another page drops the aim. A block the reader has scrolled past
+  // is a reminder they can go back to; one on a page they have LEFT is a claim
+  // about something they are no longer looking at.
+  if (aim && aim.page !== id && !composer.busy) setAim({ page: id });
   placeComposer();
 };
 
@@ -279,6 +284,8 @@ let aim: Anchor | undefined;
 
 function clearAim() {
   for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
+  aimWatch?.disconnect();
+  aimWatch = undefined;
   aim = undefined;
   composer.aim(null);
 }
@@ -314,9 +321,34 @@ function reaim() {
   setAim(still ? aim : { page: aim.page });
 }
 
-function setAim(a: Anchor | undefined) {
-  for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
-  aim = a;
+/**
+ * Watches whether the block being pointed at is still on screen.
+ *
+ * The rule the anchor was built on — "the reader has to be able to SEE what
+ * they are pointing at before they commit to a sentence about it" — was only
+ * enforced at the moment of pointing. Scroll three screens away and the aim
+ * stayed, invisible, attached to a paragraph the reader could no longer check.
+ * A question can be sent at something they never chose and never see.
+ *
+ * So the aim follows the reader: still theirs while the block is off screen,
+ * but shown as a reminder they can click to go back to, and dropped entirely
+ * if they leave the page it lives on.
+ */
+let aimWatch: IntersectionObserver | undefined;
+
+function watchAim(node: Element) {
+  aimWatch?.disconnect();
+  aimWatch = new IntersectionObserver(
+    ([entry]) => { if (entry) paintAim(!entry.isIntersecting); },
+    // A block half in view is still in view: the reader can see it and check it.
+    { root: node.closest(".sheet"), threshold: 0.15 },
+  );
+  aimWatch.observe(node);
+}
+
+/** Draw the aim line for the current `aim`, faded when it is off screen. */
+function paintAim(offScreen = false) {
+  const a = aim;
   const page = a ? pages.find((p) => p.id === a.page) : undefined;
   const block = a?.index != null ? page?.blocks[a.index] : undefined;
   if (!a || !block) {
@@ -324,9 +356,19 @@ function setAim(a: Anchor | undefined) {
     composer.placeholder("Ask a follow-up, or something new…");
     return;
   }
-  docFor(a.page)?.children[a.index!]?.classList.add("anchored");
-  composer.aim(`about ${AIM_LABEL[block.kind] ?? "this"}`);
+  const what = AIM_LABEL[block.kind] ?? "this";
+  composer.aim(offScreen ? `about ${what}, further up ↑` : `about ${what}`, { faded: offScreen });
   composer.placeholder("Change this, or ask about it…");
+}
+
+function setAim(a: Anchor | undefined) {
+  for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
+  aimWatch?.disconnect();
+  aimWatch = undefined;
+  aim = a;
+  const node = a?.index != null ? docFor(a.page)?.children[a.index] : undefined;
+  if (node) { node.classList.add("anchored"); watchAim(node); }
+  paintAim();
 }
 
 /**
@@ -427,11 +469,84 @@ function paintLibrary() {
   if (!shown.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = filter
-      ? "No sessions match. Press ↵ to ask it as a new question."
-      : library.length ? "" : "Nothing here yet. Ask something.";
-    grid.replaceChildren(empty);
+    if (filter) {
+      empty.textContent = "No sessions match. Press ↵ to ask it as a new question.";
+      grid.replaceChildren(empty);
+    } else if (library.length) {
+      grid.replaceChildren();
+    } else {
+      // The first screen anyone sees, and it used to be one flat sentence. It
+      // is the only chance to say what this is — so it says it, and offers
+      // three real questions rather than asking the reader to invent one.
+      grid.replaceChildren(firstRun());
+    }
   }
+}
+
+/**
+ * What to show someone who has never used this.
+ *
+ * An empty grid teaches nothing, and "ask something" is an instruction, not an
+ * explanation. The examples are clickable because the fastest way to explain a
+ * product that writes a website in answer to a question is to answer one.
+ */
+function firstRun(): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "firstrun";
+
+  const p = document.createElement("p");
+  p.textContent = "Ask a question and this writes you a page about it — "
+    + "a real one, with figures and tables, not a chat reply. Ask again and it "
+    + "writes the next page. One session is one small website.";
+  wrap.append(p);
+
+  const row = document.createElement("div");
+  row.className = "tryrow";
+  for (const q of [
+    "How does a four-stroke engine work?",
+    "Why do neural networks need so much data?",
+    "What actually happens when I press Enter on a URL?",
+  ]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "try";
+    b.textContent = q;
+    b.addEventListener("click", () => void composer.send(q));
+    row.append(b);
+  }
+  wrap.append(row);
+  return wrap;
+}
+
+/** Why a turn stopped, in the reader's terms rather than the loop's. */
+const CUT_SHORT: Record<string, string> = {
+  steps: "ran out of commands",
+  time: "ran out of time",
+  context: "ran out of room to think",
+  error: "hit an error",
+};
+
+/**
+ * Put a mark at the end of a page that was cut off, with the one action worth
+ * offering. Nothing else in the product says a page is incomplete — it simply
+ * stops, and stopping looks the same as finishing.
+ */
+function markUnfinished(cause: string) {
+  const id = deck.activeId;
+  const doc = id ? docFor(id) : null;
+  if (!doc || doc.querySelector(".cutshort")) return;
+
+  const box = document.createElement("div");
+  box.className = "note warn cutshort";
+  box.textContent = `This page stopped early — the agent ${
+    CUT_SHORT[cause] ?? "was interrupted"}. `;
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pagelink";
+  go.textContent = "Finish it";
+  go.addEventListener("click", () => void composer.send("Finish this page — it was cut short."));
+  box.append(go);
+  doc.append(box);
 }
 
 function when(iso: string): string {
@@ -504,7 +619,10 @@ function handle(ev: WireEvent) {
 
     case "tool_start":
       think = "";
-      composer.command(ev.command);
+      composer.activity(
+        activityLine(describeCommand(ev.command), (id) => pages.find((p) => p.id === id)?.title),
+        ev.command,
+      );
       break;
 
     case "tool_output":
@@ -634,6 +752,20 @@ function handle(ev: WireEvent) {
       break;
 
     case "turn_end": {
+      // A page the agent was cut off in the middle of looks exactly like a
+      // finished one. Marking it is what makes the failure recoverable rather
+      // than silent — and the mark carries the way to finish it.
+      if (ev.stopped !== "done" && ev.stopped !== "aborted") markUnfinished(ev.stopped);
+      // What the turn cost, kept where the environment lives. The number was
+      // always computed and always thrown away — and it is the one thing you
+      // actually want when comparing two models.
+      if (ev.usage.costUsd > 0) {
+        const spent = $("spent");
+        spent.hidden = false;
+        spent.textContent = `$${ev.usage.costUsd < 0.01
+          ? ev.usage.costUsd.toFixed(4) : ev.usage.costUsd.toFixed(2)}`;
+        spent.title = `last turn · ${ev.usage.input + ev.usage.cacheRead} in, ${ev.usage.output} out`;
+      }
       const summary = `${ev.pages} page${ev.pages === 1 ? "" : "s"} · ${ev.usage.steps} step${
         ev.usage.steps === 1 ? "" : "s"} · ${Math.round(ev.usage.ms / 100) / 10}s` +
         (ev.usage.cacheRead ? ` · cache ${ev.usage.cacheRead}` : "");
@@ -651,7 +783,12 @@ function handle(ev: WireEvent) {
     }
 
     case "error":
-      status(ev.message, "bad");
+      // A failed turn used to cost the reader their question: the error looked
+      // like every other status line and the only way forward was to type it
+      // again. It is kept, and it offers the thing they want.
+      lastFailed = lastAsk;
+      if (lastFailed) composer.failed(ev.message, () => void composer.send(lastFailed));
+      else status(ev.message, "bad");
       break;
   }
 }
@@ -665,6 +802,12 @@ composer.onStop = () => {
 
 composer.onOpen = () => { if (sessionId) setAim(currentAnchor()); };
 composer.onClose = () => clearAim();
+// Dropping the aim is not closing the composer: the reader still wants to ask,
+// just about the page rather than one paragraph of it.
+composer.onUnaim = () => {
+  setAim(aim ? { page: aim.page } : undefined);
+  composer.placeholder("Ask about this page, or something new…");
+};
 
 // Point at something else. Implicit aim is a guess; a click is a decision,
 // and it is how you say "that row", not "that page".
@@ -680,6 +823,9 @@ deckHost.addEventListener("click", (e) => {
   // land on top of the one the reader just chose.
   composer.open();
   const index = [...doc.children].indexOf(node);
+  // Clicking the block you are already pointing at stops pointing at it — the
+  // gesture undoes itself, which is the one people try first.
+  if (aim?.page === id && aim.index === index) { composer.onUnaim(); return; }
   // The name, when the block has one, is what keeps this pointing at the thing
   // the reader chose even if the agent rearranges the page while they type.
   const blockId = node.dataset.blockId;
@@ -688,8 +834,14 @@ deckHost.addEventListener("click", (e) => {
 
 composer.onType = (text) => { if (!sessionId) { filter = text; paintLibrary(); } };
 
+/** The last question asked, so a failed turn can offer to run it again. */
+let lastAsk = "";
+let lastFailed = "";
+
 composer.onSubmit = async (q) => {
   if (composer.busy) return;
+  lastAsk = q;
+  lastFailed = "";
 
   // Asked from the library: the session comes into existence because of the
   // question, and we move to it at once so the reader watches it assemble.
@@ -704,7 +856,9 @@ composer.onSubmit = async (q) => {
   clearAim();
   think = "";
   composer.working(q);
-  status("thinking", "work");
+  // The activity line already says "Thinking"; the status line is for what the
+  // model is actually saying while it does, which arrives as text deltas.
+  status("");
   turn = new AbortController();
 
   try {
@@ -748,9 +902,35 @@ window.addEventListener("pagehide", () => void retireIfUnused(sessionId, { unloa
 // library became the place you ask from.
 $("back").addEventListener("click", () => void showLibrary());
 
+// The rail opens because it was asked to. Hover-to-open meant a panel covering
+// a quarter of the page every time the pointer crossed the left edge.
+$("railtoggle").addEventListener("click", () => {
+  const open = railHost.classList.toggle("open");
+  $("railtoggle").setAttribute("aria-expanded", String(open));
+});
+
+// Keyboard help. The shortcuts existed and nothing said so.
+const keys = $("keys");
+const showKeys = (on: boolean) => { keys.hidden = !on; };
+$("keysclose").addEventListener("click", () => showKeys(false));
+window.addEventListener("keydown", (e) => {
+  const typing = e.target instanceof HTMLElement
+    && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
+  if (e.key === "?" && !typing) { e.preventDefault(); showKeys(keys.hidden); }
+  if (e.key === "Escape" && !keys.hidden) showKeys(false);
+});
+
 const health = await (await fetch("/health")).json() as
-  { hasKey: boolean; model: string; sandbox: string; replay: boolean };
-$("badge").textContent = health.replay ? "replay" : health.model;
+  { hasKey: boolean; model: string; provider: string; sandbox: string; replay: boolean };
+$("badge").textContent = health.replay ? "replay" : health.provider ?? "model";
+// The model is a fact about the session and it changes often while building,
+// so it is shown rather than hidden in .env. Switching it still needs a
+// restart — the runtime is built once per process — which is the server-side
+// half of this and a separate piece of work.
+// The last segment only: `accounts/fireworks/models/deepseek-v4-flash-0731`
+// is a path, and the chip is 46px of rail. The full id is in the tooltip.
+$("model").textContent = health.replay ? "scripted" : health.model.split("/").pop() ?? health.model;
+$("model").title = `${health.model} — set by PERPETUAL_MODEL; changing it needs a restart`;
 $("sandbox").textContent = health.sandbox;
 // Replay stamps the whole rail, not a chip. A subtle badge already cost a
 // whole evaluation once — a full-height edge cannot be read past.

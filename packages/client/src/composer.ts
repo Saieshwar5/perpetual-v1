@@ -28,6 +28,10 @@ export class Composer {
   private form: HTMLFormElement;
   private invite: HTMLButtonElement;
   private aimEl: HTMLElement;
+  private aimText: HTMLElement;
+  private verbEl: HTMLElement;
+  private rawBtn: HTMLButtonElement;
+  private rawEl: HTMLElement;
   private cmdEl: HTMLElement;
   private outEl: HTMLElement;
   private statusEl: HTMLElement;
@@ -40,6 +44,8 @@ export class Composer {
   /** Fires when the composer opens or closes, so the caller can take aim. */
   onOpen: () => void = () => {};
   onClose: () => void = () => {};
+  /** The reader stopped pointing at a block, without closing the composer. */
+  onUnaim: () => void = () => {};
 
   constructor(root: HTMLElement, floatHost: HTMLElement) {
     this.root = root;
@@ -48,12 +54,25 @@ export class Composer {
     this.form = root.querySelector(".pform")!;
     this.input = root.querySelector("input")!;
     this.aimEl = root.querySelector(".aim")!;
+    this.aimText = root.querySelector(".aimtext")!;
+    this.verbEl = root.querySelector(".verb")!;
+    this.rawBtn = root.querySelector(".rawbtn")!;
+    this.rawEl = root.querySelector(".raw")!;
     this.cmdEl = root.querySelector(".cmd")!;
     this.outEl = root.querySelector(".out")!;
     this.statusEl = root.querySelector(".pstatus")!;
 
     this.invite.addEventListener("click", () => this.open());
     root.querySelector(".stop")!.addEventListener("click", () => this.onStop());
+    root.querySelector(".aimoff")!.addEventListener("click", (e) => {
+      e.stopPropagation();          // the aim is dropped; the composer stays open
+      this.onUnaim();
+    });
+    this.rawBtn.addEventListener("click", () => {
+      const open = this.rawEl.hidden;
+      this.rawEl.hidden = !open;
+      this.rawBtn.setAttribute("aria-expanded", String(open));
+    });
 
     this.form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -94,9 +113,15 @@ export class Composer {
    * out loud is what turns a hidden mechanism into something you would think
    * to use.
    */
-  aim(text: string | null) {
-    this.aimEl.textContent = text ?? "";
+  aim(text: string | null, opts: { cancellable?: boolean; faded?: boolean } = {}) {
+    this.aimText.textContent = text ?? "";
     this.aimEl.hidden = !text;
+    // Cancellable only when there is something to cancel: the question a turn
+    // is running under is a fact, not a choice.
+    this.aimEl.classList.toggle("cancellable", Boolean(text) && opts.cancellable !== false);
+    // Faded means the block is no longer on screen — still pointed at, but the
+    // reader cannot see it, so it should not look as certain as one they can.
+    this.aimEl.classList.toggle("faded", Boolean(opts.faded));
   }
 
   /**
@@ -160,10 +185,14 @@ export class Composer {
     this.state = "busy";
     // Keep the question on screen while the turn runs. Without it a turn shows
     // a command and a spinner, and nothing saying what was even asked.
-    this.aim(asking ? `“${asking}”` : null);
+    this.aim(asking ? `“${asking}”` : null, { cancellable: false });
+    this.verbEl.textContent = "Thinking";
+    this.verbEl.classList.remove("bad");
     this.cmdEl.textContent = "";
     this.outEl.textContent = "";
     this.cmdEl.classList.remove("bad");
+    this.rawEl.hidden = true;
+    this.rawBtn.setAttribute("aria-expanded", "false");
     if (this.root.parentElement !== this.floatHost) {
       this.floatHost.append(this.root);
       this.root.classList.remove("docked");
@@ -176,9 +205,16 @@ export class Composer {
     this.paint();
   }
 
-  command(text: string) {
-    this.cmdEl.textContent = text.split("\n")[0]!.slice(0, 120);
-    this.cmdEl.classList.remove("bad");
+  /**
+   * What is happening, and — folded away — the command that is doing it.
+   *
+   * The reader gets a word they know; the raw command stays reachable behind
+   * the toggle for the moment it is the only thing that explains a failure.
+   */
+  activity(line: string, raw: string) {
+    this.verbEl.textContent = line;
+    this.verbEl.classList.remove("bad");
+    this.cmdEl.textContent = raw.split("\n")[0]!.slice(0, 200);
     this.outEl.textContent = "";
   }
 
@@ -187,11 +223,39 @@ export class Composer {
     this.outEl.textContent = (this.outEl.textContent + chunk).split("\n").slice(-2).join("\n");
   }
 
-  commandFailed() { this.cmdEl.classList.add("bad"); }
+  /**
+   * A command failed. The raw command opens itself: this is exactly the moment
+   * it stops being noise and starts being the answer.
+   */
+  commandFailed() {
+    this.verbEl.classList.add("bad");
+    this.cmdEl.classList.add("bad");
+    this.rawEl.hidden = false;
+    this.rawBtn.setAttribute("aria-expanded", "true");
+  }
 
   status(text: string, tone: "" | "work" | "bad" = "") {
     this.statusEl.textContent = text;
     this.statusEl.className = `pstatus ${tone}`;
+  }
+
+  /**
+   * A turn failed. Says so, and offers the only thing the reader wants.
+   *
+   * Failure used to look like every other status line, and the way forward was
+   * to type the question again — so a provider hiccup cost the reader their
+   * sentence. The question is already known; asking them to reproduce it is
+   * the harness making its problem theirs.
+   */
+  failed(message: string, retry: () => void) {
+    this.statusEl.className = "pstatus bad";
+    this.statusEl.textContent = `${message} `;
+    const again = document.createElement("button");
+    again.type = "button";
+    again.className = "retry";
+    again.textContent = "Try again";
+    again.addEventListener("click", retry);
+    this.statusEl.append(again);
   }
 
   private paint() {

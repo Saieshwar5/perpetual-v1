@@ -7,15 +7,29 @@
    it picks a block, and the block is styled here, once.
    ------------------------------------------------------------------------ */
 
+/* A neutral grey scale, and the page itself is pure white.
+   The warm cream this replaces was a style choice that was never earned; grey
+   is quieter and stays consistent as the vocabulary grows.
+
+   ONE VALUE IS DELIBERATELY NOT PURE. Black text on white is 21:1, the highest
+   contrast there is, and it reads badly over a long page: the excess makes
+   letters appear to bloom into the paper — halation — and it is a known
+   trigger for eye strain and for readers with astigmatism. Every product built
+   for reading avoids it. So the SURFACES are pure, as asked, and the INK is
+   near-black at about 17:1, still far above the strictest accessibility bar.
+
+   The surfaces also had to flip. On a cream page a card was LIGHTER than its
+   background; on a white one there is nothing lighter, so a card is a shade
+   darker and leans on its border instead. */
 :root {
-  --bg:        #f1f1ee;
-  --surface:   #fbfbf9;
-  --surface-2: #e9e9e4;
-  --ink:       #17181a;
-  --ink-2:     #5c616a;
-  --ink-3:     #8d929a;
-  --line:      #dededa;
-  --line-2:    #cbcbc4;
+  --bg:        #ffffff;
+  --surface:   #f7f8f9;
+  --surface-2: #eef0f2;
+  --ink:       #16181d;
+  --ink-2:     #5a6069;
+  --ink-3:     #8b929b;
+  --line:      #e4e6e9;
+  --line-2:    #cfd3d8;
   --accent:    #0e6e5b;
   --accent-in: #ffffff;
   --accent-sf: rgba(14, 110, 91, .10);
@@ -54,16 +68,20 @@
   --ease: cubic-bezier(.22, 1, .36, 1);
 }
 
+/* Pure black, which is a real gain on an OLED panel: the pixels are off, the
+   contrast is absolute, and it costs less power. The ink is NOT pure white,
+   for the same reason the light theme's ink is not pure black — inverted
+   halation is worse, not better. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg:        #101114;
-    --surface:   #17191d;
-    --surface-2: #202329;
-    --ink:       #e8e8e3;
-    --ink-2:     #9aa0a9;
-    --ink-3:     #6d737c;
-    --line:      #282b31;
-    --line-2:    #363a42;
+    --bg:        #000000;
+    --surface:   #0d0f12;
+    --surface-2: #16191e;
+    --ink:       #e8e9ec;
+    --ink-2:     #9aa0a8;
+    --ink-3:     #6b7178;
+    --line:      #22252a;
+    --line-2:    #32363d;
     --accent:    #4fc7a6;
     --accent-in: #08201b;
     --accent-sf: rgba(79, 199, 166, .12);
@@ -73,14 +91,14 @@
 }
 
 :root[data-theme="dark"] {
-  --bg:        #101114;
-  --surface:   #17191d;
-  --surface-2: #202329;
-  --ink:       #e8e8e3;
-  --ink-2:     #9aa0a9;
-  --ink-3:     #6d737c;
-  --line:      #282b31;
-  --line-2:    #363a42;
+  --bg:        #000000;
+  --surface:   #0d0f12;
+  --surface-2: #16191e;
+  --ink:       #e8e9ec;
+  --ink-2:     #9aa0a8;
+  --ink-3:     #6b7178;
+  --line:      #22252a;
+  --line-2:    #32363d;
   --accent:    #4fc7a6;
   --accent-in: #08201b;
   --accent-sf: rgba(79, 199, 166, .12);
@@ -170,13 +188,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 8px; flex-shrink: 0;
 }
 .railtop { border-bottom: 1px solid transparent; }
-.rail:hover .railtop, .rail.open .railtop { border-bottom-color: var(--line); }
+.rail.open .railtop { border-bottom-color: var(--line); }
 
 .railfoot {
   flex-wrap: wrap; margin-top: auto;
   border-top: 1px solid transparent; justify-content: center;
 }
-.rail:hover .railfoot, .rail.open .railfoot {
+.rail.open .railfoot {
   border-top-color: var(--line); justify-content: flex-start;
 }
 
@@ -191,8 +209,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
    ticks say where you are; the name is only wanted when you are orienting,
    which is exactly when you would hover. */
 .rail .wide { display: none; }
-.rail:hover .wide, .rail.open .wide { display: flex; }
-.rail:hover .narrow, .rail.open .narrow { display: none; }
+.rail.open .wide { display: flex; }
+.rail.open .narrow { display: none; }
 
 .stitle {
   font-weight: 500; font-size: .88rem; white-space: nowrap;
@@ -210,6 +228,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex-shrink: 0;
 }
+/* What the last turn cost. Always computed, never shown until now — and it is
+   the number you actually want when comparing two models. */
+.chip.spent { color: var(--ink-2); border-color: var(--line-2); }
 .rail.replay .dot { background: var(--warn); }
 
 /* ------------------------------------------------------------------- rail */
@@ -225,17 +246,31 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .rail.replay { box-shadow: inset -3px 0 0 var(--warn); }
 
 .railmid { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.rail:hover, .rail.open { width: var(--rail-open); box-shadow: 12px 0 32px -24px rgba(0,0,0,.5); }
+/* Open, it still overlays rather than pushing the page — moving the page would
+   re-wrap every line and throw the reader's position away, which is worse than
+   a panel on top of it. What was wrong was that HOVER did this: brushing the
+   left edge covered a quarter of the page with something nobody asked for. Now
+   it takes a click, and what it covers is dimmed so the overlap reads as
+   deliberate instead of broken. */
+.rail.open { width: var(--rail-open); box-shadow: 14px 0 40px -24px rgba(0,0,0,.45); }
+.rail.open ~ .deck::after {
+  content: ""; position: absolute; inset: 0; z-index: 20;
+  background: var(--bg); opacity: .55;
+  animation: dimin .18s var(--ease);
+}
+@keyframes dimin { from { opacity: 0; } }
+.railtoggle { margin-left: auto; }
+.rail.open .railtoggle { transform: rotate(90deg); }
 
 .ticks {
   display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 18px 0;
 }
-.rail:hover .ticks, .rail.open .ticks { display: none; }
+.rail.open .ticks { display: none; }
 .tick { width: 14px; height: 2px; border-radius: 2px; background: var(--line-2); transition: background .15s; }
 .tick.on { background: var(--accent); width: 20px; }
 
 .thread { display: none; flex-direction: column; padding: 10px 8px; overflow-y: auto; flex: 1; }
-.rail:hover .thread, .rail.open .thread { display: flex; }
+.rail.open .thread { display: flex; }
 .row {
   display: flex; gap: 10px; align-items: baseline; text-align: left; width: 100%;
   background: none; border: 0; border-radius: 8px; padding: 9px 10px; color: var(--ink-2);
@@ -501,7 +536,27 @@ button { font: inherit; color: inherit; cursor: pointer; }
   box-shadow: 0 14px 34px -24px rgba(0, 0, 0, .6);
   transition: border-color .15s, box-shadow .18s var(--ease);
 }
-.pill:focus-within { border-color: var(--accent); }
+/* Resting, it is a line rather than a card: the page is what matters, and a
+   permanent input box is what makes something look like a chat. It wakes on a
+   real intention — focus, an open state, a running turn — and not on hover
+   alone, because a box that inflates as the pointer crosses it is jumpy. */
+.pill[data-state="idle"]:not(.docked) {
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border-color: var(--line);
+  box-shadow: none;
+  padding: 2px;
+  backdrop-filter: blur(6px);
+}
+.pill[data-state="idle"]:not(.docked) .invite { padding: 6px 11px; font-size: .82rem; }
+.pill[data-state="idle"]:not(.docked):hover {
+  border-color: var(--line-2);
+  background: var(--surface);
+}
+.pill:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 14px 34px -24px rgba(0, 0, 0, .6);
+  padding: 6px;
+}
 
 /* Docked: no card, no shadow — it reads as the last line of the page. */
 .dock { padding: 0 var(--gutter) 26vh; }
@@ -541,9 +596,32 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* --- state: busy ------------------------------------------------------- */
 
+/* What is happening, in words. The command that produced it lives behind the
+   ⋯ toggle: hidden because it is the implementation, kept because when a turn
+   fails it is the only thing that explains why — at which point it opens
+   itself. */
 .pill .work {
   display: none; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 10px 12px; font-family: var(--mono); font-size: .72rem;
+  padding: 10px 12px; font-size: .8rem;
+}
+.pill .verb { flex: 1; min-width: 0; color: var(--ink); }
+.pill .verb::after {
+  content: "…"; color: var(--ink-3);
+  animation: think 1.4s steps(4, end) infinite; overflow: hidden;
+  display: inline-block; vertical-align: bottom; width: 1.1em; text-align: left;
+}
+@keyframes think { from { width: 0; } to { width: 1.1em; } }
+.pill .verb.bad { color: var(--warn); }
+.pill .verb.bad::after { content: ""; animation: none; }
+.pill .rawbtn {
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--ink-3); font-size: .8rem; line-height: 1; padding: 4px 7px;
+}
+.pill .rawbtn:hover { border-color: var(--line-2); color: var(--ink); }
+.pill .rawbtn[aria-expanded="true"] { border-color: var(--line-2); color: var(--ink); }
+.pill .raw {
+  flex-basis: 100%; display: flex; flex-direction: column; gap: 4px;
+  font-family: var(--mono); font-size: .7rem;
 }
 .pill .cmd {
   flex: 1; min-width: 0; color: var(--accent);
@@ -567,6 +645,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .pill.docked .pstatus { text-align: left; padding-left: 0; }
 .pill .pstatus.work { color: var(--accent); }
 .pill .pstatus.bad { color: var(--warn); }
+.pill .retry {
+  background: none; border: 1px solid var(--warn); border-radius: 999px;
+  color: var(--warn); font-size: .7rem; padding: 2px 9px; margin-left: 4px;
+}
+.pill .retry:hover { background: var(--warn-sf); }
 .pill .pstatus:empty { display: none; }
 
 .pill[data-state="open"] .invite,
@@ -641,6 +724,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   padding: 14px; min-width: 250px;
   box-shadow: 0 18px 40px -26px rgba(0, 0, 0, .65);
 }
+/* Four segmented controls stacked with nothing between them read as one wall
+   of switches. Two words of grouping is the whole fix. */
+.pgroup {
+  font-size: .66rem; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--ink-3); margin-top: 2px;
+}
+.pgroup + .prow { margin-top: -4px; }
 .prow { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .prow > span { font-size: .8rem; color: var(--ink-2); white-space: nowrap; }
 
@@ -693,9 +783,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
    every block in the page marked the same way. */
 
 .pill .aim {
+  display: flex; align-items: center; gap: 6px;
   padding: 8px 12px 0; font-size: .72rem; color: var(--accent);
   letter-spacing: .02em;
 }
+/* Off screen: still pointed at, but the reader cannot see it, so it should not
+   look as certain as one they can. */
+.pill .aim.faded { color: var(--ink-3); }
+.pill .aimoff {
+  background: none; border: 0; border-radius: 5px; line-height: 1;
+  padding: 1px 5px 3px; font-size: .95rem; color: inherit; opacity: .65;
+}
+.pill .aimoff:hover { opacity: 1; background: var(--surface-2); }
+.pill .aim:not(.cancellable) .aimoff { display: none; }
 .pill.docked .aim { padding-left: 0; }
 .pill[data-state="idle"] .aim { display: none; }
 .pill[data-state="busy"] .aim { color: var(--ink-2); font-style: italic; }
@@ -774,3 +874,48 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc .nextq.spent { color: var(--ink-3); cursor: default; opacity: .75; }
 .doc .nextq.spent::before { content: "·"; }
 .doc .nextq.spent:hover { color: var(--ink-3); padding-left: 0; }
+
+/* ------------------------------------------------------- first run, keys */
+
+/* The first screen anyone sees. An empty grid teaches nothing, and "ask
+   something" is an instruction rather than an explanation — so this explains,
+   and then offers three real questions, because the fastest way to describe a
+   thing that answers questions with a website is to answer one. */
+.firstrun { grid-column: 1 / -1; max-width: 46rem; }
+.firstrun p {
+  margin: 0 0 18px; font-size: 1.05rem; line-height: 1.7; color: var(--ink-2);
+}
+.tryrow { display: flex; flex-wrap: wrap; gap: 9px; }
+.try {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+  padding: 9px 16px; font-size: .88rem; color: var(--ink);
+  transition: border-color .14s, transform .14s var(--ease);
+}
+.try:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+
+/* What the product can do without the mouse. The shortcuts were all there and
+   nothing ever said so, which makes them features only the source knows. */
+.keys {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(3px);
+}
+.keys h2 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 1.3rem; }
+.keys dl {
+  display: grid; grid-template-columns: auto 1fr; gap: 10px 20px;
+  margin: 0; padding: 20px 26px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px;
+  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, .5);
+}
+.keys dt {
+  font-family: var(--mono); font-size: .78rem; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; justify-self: start;
+}
+.keys dd { margin: 0; font-size: .86rem; color: var(--ink-2); align-self: center; }
+
+/* A page the agent was cut off in the middle of looks exactly like a finished
+   one. This is the difference, and it carries the way to fix it. */
+.doc .cutshort { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.doc .cutshort .pagelink { margin: 0; color: var(--warn); border-color: var(--warn); }
+.doc .cutshort .pagelink:hover { background: var(--warn-sf); }
