@@ -38,8 +38,19 @@ export async function systemPrompt(): Promise<string> {
  * without spending commands on it: what the site already contains, and what
  * the user asked before. Everything else it can go and read.
  */
-/** A block, in a phrase — enough for the agent to know which one is meant. */
+/**
+ * A block, in a phrase — enough for the agent to know which one is meant.
+ *
+ * A named block leads with its name, because the name is ACTIONABLE: the agent
+ * can rewrite the line carrying that id and the reader's page updates in place
+ * around it. A description is only recognisable; a name is addressable.
+ */
 function describeBlock(b: Block): string {
+  const what = describeBlockShape(b);
+  return b.id ? `\`${b.id}\` — ${what}` : what;
+}
+
+function describeBlockShape(b: Block): string {
   switch (b.kind) {
     case "heading": case "section": case "prose": case "quote": case "note":
       return `a ${b.kind} block beginning "${b.text.slice(0, 60)}…"`;
@@ -93,11 +104,20 @@ export function turnMessage(
   if (opts.anchor) {
     const page = opts.site.pages.find((p) => p.id === opts.anchor!.page);
     if (page) {
-      const at = opts.anchor.index != null ? page.blocks[opts.anchor.index] : undefined;
+      // Resolve by NAME first: the page may have moved under the reader while
+      // they were typing, in which case the index is stale and the id is not.
+      const byId = opts.anchor.id
+        ? page.blocks.find((b) => b.id === opts.anchor!.id)
+        : undefined;
+      const at = byId ?? (opts.anchor.index != null ? page.blocks[opts.anchor.index] : undefined);
       parts.push(
         `\nThe user is asking from **${page.id}** ("${page.title}")` +
         (at ? `, looking at ${describeBlock(at)}` : "") +
-        ". If they are correcting or refining that page, rewrite it in place.",
+        ". If they are correcting or refining that page, rewrite it in place." +
+        (at?.id
+          ? ` That block is named \`${at.id}\` — if the fix is confined to it, rewrite ` +
+            "only its line and the reader's page updates around it without being rebuilt."
+          : ""),
       );
     }
   }

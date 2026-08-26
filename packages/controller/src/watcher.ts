@@ -15,10 +15,71 @@
  * scroll position and its identity.
  */
 import { readSite } from "./site.ts";
+import type { Block } from "@perpetual/shared/blocks";
 import type { Page, Problem, Site } from "@perpetual/shared/site";
 import type { TurnEvent } from "@perpetual/shared/events";
 
 const key = (p: Problem) => `${p.page}:${p.line ?? "-"}:${p.message}`;
+const same = (a: Block, b: Block) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Is this page reconcilable by name?
+ *
+ * All-or-nothing, deliberately. A half-keyed list is the worst of both: the
+ * named blocks reconcile while the unnamed ones shuffle underneath them, and
+ * the result is a page that is *sometimes* stable — harder to reason about
+ * than one that never is. So a page earns block-by-block updates by naming
+ * every block, and `site.ts` tells the agent when it has named only some.
+ */
+function keyed(blocks: Block[]): boolean {
+  return blocks.length > 0 && blocks.every((b) => typeof b.id === "string" && b.id.length > 0);
+}
+
+/**
+ * The keyed reconciliation: what HAPPENED, rather than what it now looks like.
+ *
+ * Ops are emitted against a WORKING COPY of the previous list, so every index
+ * is the index at the moment that op is applied. The client mutates its own
+ * array and its DOM with the same ops in the same order and lands on the same
+ * page — no list-diffing code shared between the two, and no chance of the two
+ * implementations drifting apart.
+ *
+ * Removals go first, back to front, so the alignment pass that follows only
+ * ever inserts or moves. That keeps it linear and, more importantly, keeps it
+ * readable: remove, then walk, and nothing else.
+ */
+function keyedOps(page: string, before: Block[], after: Block[]): TurnEvent[] {
+  const evs: TurnEvent[] = [];
+  const work = [...before];
+  const wanted = new Set(after.map((b) => b.id));
+
+  for (let i = work.length - 1; i >= 0; i--) {
+    if (!wanted.has(work[i]!.id)) {
+      evs.push({ type: "page_block_remove", page, index: i });
+      work.splice(i, 1);
+    }
+  }
+
+  for (const [i, want] of after.entries()) {
+    // Ids are unique per page, so this can only find it at or after i: every
+    // slot before i already holds the block it is supposed to hold.
+    const at = work.findIndex((b, j) => j >= i && b.id === want.id);
+    if (at === -1) {
+      evs.push({ type: "page_block_insert", page, index: i, block: want });
+      work.splice(i, 0, want);
+      continue;
+    }
+    if (at !== i) {
+      evs.push({ type: "page_block_move", page, from: at, to: i });
+      work.splice(i, 0, ...work.splice(at, 1));
+    }
+    if (!same(work[i]!, want)) {
+      evs.push({ type: "page_block_replace", page, index: i, block: want });
+      work[i] = want;
+    }
+  }
+  return evs;
+}
 
 export class SiteWatcher {
   private siteDir: string;
@@ -69,6 +130,9 @@ export class SiteWatcher {
         .map((b, bi) => (JSON.stringify(b) === JSON.stringify(page.blocks[bi]) ? -1 : bi))
         .filter((bi) => bi !== -1);
 
+      // A plain append streams the same way whether the page is named or not,
+      // and it is the common case by a wide margin — so it stays first, ahead
+      // of any reconciliation. Progressive assembly is untouched by all this.
       if (grew && changed.length === 0) {
         for (let bi = before.blocks.length; bi < page.blocks.length; bi++) {
           events.push({ type: "page_block", page: page.id, index: bi, block: page.blocks[bi]! });
@@ -80,6 +144,11 @@ export class SiteWatcher {
         // when that matters most.
         const bi = changed[0]!;
         events.push({ type: "page_block_replace", page: page.id, index: bi, block: page.blocks[bi]! });
+      } else if (keyed(before.blocks) && keyed(page.blocks)) {
+        // Named on both sides: say what happened. An insert stays an insert, a
+        // deletion stays a deletion, and every block that did not change keeps
+        // its node — which is the whole reason ids exist.
+        events.push(...keyedOps(page.id, before.blocks, page.blocks));
       } else if (changed.length > 0 || page.blocks.length !== before.blocks.length) {
         events.push({ type: "page_replace", page });
       }

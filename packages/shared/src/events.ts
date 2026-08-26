@@ -33,6 +33,26 @@ export type TurnEvent =
   | { type: "page_block"; page: string; index: number; block: Block }
   /** One block changed in place — a regenerated figure, a corrected number. */
   | { type: "page_block_replace"; page: string; index: number; block: Block }
+
+  /*
+   * The three below exist only for pages where every block carries an `id`.
+   * Without ids the watcher cannot tell an insert from a rewrite — it can only
+   * compare position against position — so any structural change falls back to
+   * `page_replace`, which throws the whole page away. With ids it can say what
+   * actually happened, and the reader keeps their scroll, their anchor, and
+   * the identity of every node that did not change.
+   *
+   * They are ORDERED OPS: applied in the order received, the client's array
+   * matches the file. The watcher builds them against a working copy, so every
+   * index is the index at the moment that op is applied.
+   */
+  /** A block appeared between others. */
+  | { type: "page_block_insert"; page: string; index: number; block: Block }
+  /** A block went away. */
+  | { type: "page_block_remove"; page: string; index: number }
+  /** A block that exists is now elsewhere. The node moves; it is not rebuilt. */
+  | { type: "page_block_move"; page: string; from: number; to: number }
+
   /** A page changed in a way that is not an append — rewritten, or amended. */
   | { type: "page_replace"; page: Page }
   /** A page directory went away. */

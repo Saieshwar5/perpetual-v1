@@ -123,6 +123,8 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
   const complete = lastNl === -1 ? "" : raw.slice(0, lastNl);
 
   let blocks: Block[] = [];
+  /** id -> the line that claimed it, for the duplicate message below. */
+  const idLines = new Map<string, number>();
   let lineNo = 0;
   for (const line of complete.split("\n")) {
     lineNo++;
@@ -146,7 +148,43 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
       const bad = checkMarkup(f.text, f.honoured);
       if (bad) problems.push({ page: id, line: lineNo, message: `${f.where}: ${bad}` });
     }
+    // Uniqueness is the one thing an id MUST have, and it is a property of the
+    // page rather than of the line — so it is checked here, where the page is.
+    // ENFORCED rather than reported: a duplicate name would make the keyed
+    // reconciliation choose the wrong block, which is worse than a page that
+    // simply falls back to being rebuilt. The block keeps its content and
+    // loses only the name it could not have.
+    const named = v.value.id;
+    if (named != null) {
+      const taken = idLines.get(named);
+      if (taken != null) {
+        problems.push({
+          page: id, line: lineNo,
+          message: `\`id\` "${named}" is already used on line ${taken}. Ids name ONE ` +
+                   "block each — that is what lets a later command update this block " +
+                   "and nothing else. This one is being ignored; give it its own name.",
+        });
+        delete (v.value as { id?: string }).id;
+      } else {
+        idLines.set(named, lineNo);
+      }
+    }
     blocks.push(v.value);
+  }
+
+  // Naming half a page buys nothing: reconciliation is all-or-nothing (see
+  // `watcher.ts`), so a page with one unnamed block is still rebuilt whole.
+  // Worth one sentence to the agent, because the fix is small and the gain is
+  // the difference between amending a page and replacing it.
+  const namedCount = blocks.filter((b) => b.id != null).length;
+  if (namedCount > 0 && namedCount < blocks.length) {
+    problems.push({
+      page: id,
+      message: `${namedCount} of ${blocks.length} blocks have an \`id\`. Ids work per ` +
+               "page, not per block: until every block on this page has one, changing " +
+               "any of them rebuilds the whole page and the reader loses their place. " +
+               "Name the rest, or none.",
+    });
   }
 
   // Structure. `heading` is the page's claim and `section` breaks a long
@@ -216,8 +254,10 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
     }
 
     // The id prefix must be unique per figure: every figure on a page is
-    // inlined into ONE document, so they share an id namespace.
-    const clean = sanitizeSvg(raw, `${id}-${i}`);
+    // inlined into ONE document, so they share an id namespace. A named figure
+    // prefixes with its name — it survives being moved, where a positional
+    // prefix would change every internal id the moment a block above it moved.
+    const clean = sanitizeSvg(raw, b.id ? `${id}-${b.id}` : `${id}-${i}`);
     if (!clean.ok) {
       problems.push({ page: id, message: `${b.src} ${clean.error}` });
       continue;

@@ -186,6 +186,37 @@ function clearAim() {
   composer.aim(null);
 }
 
+/**
+ * Re-resolve the held anchor after the page moved underneath it.
+ *
+ * The reader points at a paragraph and starts typing; the agent, mid-sentence,
+ * inserts a note above it. The anchor was an INDEX, so it now points at
+ * whatever slid into that slot — the reader would be asking about a block they
+ * never chose, and the mark in the gutter would be beside the wrong thing.
+ *
+ * A named block has a name, so this finds it again. An unnamed one cannot be
+ * found, and the honest thing is to drop to the page rather than keep a
+ * position that is probably a lie.
+ */
+function reaim() {
+  if (!aim) return;
+  if (aim.index == null) return;                    // already page-level
+  const page = pages.find((p) => p.id === aim!.page);
+  if (!page) { setAim(undefined); return; }
+
+  if (aim.id) {
+    const now = page.blocks.findIndex((b) => b.id === aim!.id);
+    if (now === -1) { setAim({ page: aim.page }); return; }
+    if (now !== aim.index) setAim({ ...aim, index: now });
+    else setAim(aim);                               // repaint: the node may be new
+    return;
+  }
+  // Unnamed: the index may still be right, but nothing can prove it. Keep it
+  // only while it points at a block of the same kind — otherwise let it go.
+  const still = page.blocks[aim.index];
+  setAim(still ? aim : { page: aim.page });
+}
+
 function setAim(a: Anchor | undefined) {
   for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
   aim = a;
@@ -220,7 +251,9 @@ function currentAnchor(): Anchor | undefined {
     const gap = Math.abs((r.top + r.bottom) / 2 - mid);
     if (gap < bestGap) { bestGap = gap; best = i; }
   }
-  return best === -1 ? { page: id } : { page: id, index: best };
+  if (best === -1) return { page: id };
+  const block = pages.find((p) => p.id === id)?.blocks[best];
+  return { page: id, index: best, ...(block?.id ? { id: block.id } : {}) };
 }
 rail.onPick = (id) => deck.gotoId(id);
 
@@ -403,6 +436,51 @@ function handle(ev: WireEvent) {
       // Swapped in place: everything around it keeps its identity, and the
       // reader keeps their scroll position.
       node.replaceWith(renderBlock(ev.block, ACTIONS));
+      reaim();
+      break;
+    }
+
+    // The keyed ops. Each one is a surgical change to a page that would
+    // otherwise have been thrown away and rebuilt: the reader keeps their
+    // scroll position, and every node that did not change keeps its identity —
+    // its animations, its anchored mark, and the focus inside it.
+    //
+    // None of them refit. Fitting is settled once the turn is, exactly as it
+    // is for an append or a whole-page replace — a page that reflowed into two
+    // columns halfway through being amended would be worse than one that waits.
+    case "page_block_insert": {
+      const doc = docFor(ev.page);
+      const page = pages.find((p) => p.id === ev.page);
+      if (!doc || !page) break;
+      page.blocks.splice(ev.index, 0, ev.block);
+      const node = renderBlock(ev.block, ACTIONS);
+      const at = doc.children[ev.index];
+      if (at) doc.insertBefore(node, at); else doc.append(node);
+      reaim();
+      break;
+    }
+
+    case "page_block_remove": {
+      const doc = docFor(ev.page);
+      const page = pages.find((p) => p.id === ev.page);
+      if (!doc || !page) break;
+      page.blocks.splice(ev.index, 1);
+      doc.children[ev.index]?.remove();
+      reaim();
+      break;
+    }
+
+    case "page_block_move": {
+      const doc = docFor(ev.page);
+      const page = pages.find((p) => p.id === ev.page);
+      const node = doc?.children[ev.from];
+      if (!doc || !page || !node) break;
+      page.blocks.splice(ev.to, 0, ...page.blocks.splice(ev.from, 1));
+      // Moved, not re-rendered: a figure keeps its drawing, a chart keeps its
+      // bars where they are, and nothing flashes.
+      const at = doc.children[ev.to > ev.from ? ev.to + 1 : ev.to];
+      if (at) doc.insertBefore(node, at); else doc.append(node);
+      reaim();
       break;
     }
 
@@ -417,6 +495,7 @@ function handle(ev: WireEvent) {
       doc.replaceChildren();
       for (const b of ev.page.blocks) appendBlock(doc, b, ACTIONS);
       paintRail();
+      reaim();
       break;
     }
 
@@ -494,7 +573,11 @@ deckHost.addEventListener("click", (e) => {
   // Open FIRST: opening recomputes the implicit aim, and it would otherwise
   // land on top of the one the reader just chose.
   composer.open();
-  setAim({ page: id, index: [...doc.children].indexOf(node) });
+  const index = [...doc.children].indexOf(node);
+  // The name, when the block has one, is what keeps this pointing at the thing
+  // the reader chose even if the agent rearranges the page while they type.
+  const blockId = node.dataset.blockId;
+  setAim({ page: id, index, ...(blockId ? { id: blockId } : {}) });
 });
 
 composer.onType = (text) => { if (!sessionId) { filter = text; paintLibrary(); } };

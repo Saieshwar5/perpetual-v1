@@ -17,7 +17,32 @@
  * controller needs the validator, and neither should drag pi-ai along.
  */
 
-export interface Heading { kind: "heading"; text: string }
+/**
+ * The one field every block may carry: a name for itself.
+ *
+ * Without it a block's only name is its POSITION, and position is a name that
+ * changes when anything above it changes. That is the ceiling on everything
+ * interactive: the watcher can only express "one block changed, count
+ * identical" — an insert, a delete or a reorder collapses to "throw the page
+ * away and rebuild it", the reader loses their place, and a held anchor points
+ * at whatever slid into the slot. Doors already worked around this by keying
+ * their taken-state on the question TEXT, because there was no key.
+ *
+ * So: an optional, agent-chosen, stable name. Blocks that have one can be
+ * updated, moved, removed and pointed at BY NAME. It is the same primitive
+ * every UI framework converged on independently — a key on a list item.
+ *
+ * Optional, and all-or-nothing per page (see `site.ts`): a page where every
+ * block is named is reconciled by name, and a page with any unnamed block
+ * behaves exactly as it always has. Nothing existing breaks; the agent opts
+ * in one page at a time.
+ */
+export interface BlockBase {
+  /** Lowercase, digits and dashes: `margin-trend`. Unique within its page. */
+  id?: string;
+}
+
+export interface Heading extends BlockBase { kind: "heading"; text: string }
 /**
  * A break in a long explanation. plans/17 §B1.
  *
@@ -25,28 +50,28 @@ export interface Heading { kind: "heading"; text: string }
  * claim, then three section breaks — because the vocabulary had one word for
  * two jobs. It was right to want the distinction; we had not given it one.
  */
-export interface Section { kind: "section"; text: string }
-export interface Prose { kind: "prose"; text: string }
-export interface Quote { kind: "quote"; text: string }
-export interface List { kind: "list"; items: string[] }
-export interface Metrics {
+export interface Section extends BlockBase { kind: "section"; text: string }
+export interface Prose extends BlockBase { kind: "prose"; text: string }
+export interface Quote extends BlockBase { kind: "quote"; text: string }
+export interface List extends BlockBase { kind: "list"; items: string[] }
+export interface Metrics extends BlockBase {
   kind: "metrics";
   items: { value: string; label: string; emphasis?: boolean }[];
 }
-export interface Chart {
+export interface Chart extends BlockBase {
   kind: "chart";
   values: number[];
   labels?: string[];
   highlight?: number[];
   caption?: string;
 }
-export interface Table { kind: "table"; headers: string[]; rows: string[][] }
-export interface Split { kind: "split"; panels: { title: string; text: string }[] }
-export interface Flow { kind: "flow"; steps: { label: string; warn?: boolean }[] }
-export interface Code { kind: "code"; text: string; lang?: string }
-export interface Note { kind: "note"; text: string; tone?: "info" | "warn" }
+export interface Table extends BlockBase { kind: "table"; headers: string[]; rows: string[][] }
+export interface Split extends BlockBase { kind: "split"; panels: { title: string; text: string }[] }
+export interface Flow extends BlockBase { kind: "flow"; steps: { label: string; warn?: boolean }[] }
+export interface Code extends BlockBase { kind: "code"; text: string; lang?: string }
+export interface Note extends BlockBase { kind: "note"; text: string; tone?: "info" | "warn" }
 /** A link to another page in this site. The target is verified on read. */
-export interface Link { kind: "link"; page: string; text?: string }
+export interface Link extends BlockBase { kind: "link"; page: string; text?: string }
 
 /**
  * Doors the reader did not know were there.
@@ -57,7 +82,7 @@ export interface Link { kind: "link"; page: string; text?: string }
  * the PAGE raised, which the reader had no way to know were worth asking,
  * because the agent has just read the subject and they have not.
  */
-export interface Next { kind: "next"; items: string[] }
+export interface Next extends BlockBase { kind: "next"; items: string[] }
 
 /**
  * A drawing. Tier 3. plans/16 §3.
@@ -67,7 +92,7 @@ export interface Next { kind: "next"; items: string[] }
  * `svg` in on the way to the client, which inlines it. The agent cannot put
  * markup on the wire directly, by construction.
  */
-export interface Figure {
+export interface Figure extends BlockBase {
   kind: "figure";
   /** A `.svg` filename in this page's own directory. No paths. */
   src: string;
@@ -214,6 +239,9 @@ export function textFields(b: Block): { where: string; text: string; honoured: b
   return out;
 }
 
+/** See BlockBase. Kept beside the validator so the rule has one definition. */
+export const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
 const isRec = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -236,6 +264,17 @@ export function validateBlock(v: unknown): Valid<Block> {
   }
 
   const bad = (m: string): Valid<Block> => ({ ok: false, error: `${kind}: ${m}` });
+
+  // A name has to be usable as one: readable in a diff, typeable in a prompt,
+  // safe as a DOM attribute. Uniqueness is a property of the PAGE, so it is
+  // checked where the page is read, not here.
+  if (v.id != null) {
+    if (typeof v.id !== "string" || !ID_RE.test(v.id)) {
+      return bad(`\`id\` is ${JSON.stringify(v.id)}. An id is lowercase letters, ` +
+        "digits and dashes, starting with a letter or digit, up to 40 characters — " +
+        '`margin-trend`, `step-2`. It is a name you can refer to later.');
+    }
+  }
 
   switch (kind as BlockKind) {
     case "heading":
