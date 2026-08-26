@@ -71,7 +71,10 @@ export type TurnEvent =
  * page may be unfinished — which used to be invisible: a truncated turn and a
  * completed one looked identical from every side.
  */
-export type StopCause = "done" | "steps" | "time" | "aborted" | "error";
+export type StopCause =
+  | "done" | "steps" | "time" | "aborted" | "error"
+  /** Ran out of room to think in — stopped deliberately, before the provider refused. */
+  | "context";
 
 export interface Usage {
   input: number;

@@ -642,6 +642,8 @@ function handle(ev: WireEvent) {
         status(`stopped after ${ev.usage.steps} steps — the page may be unfinished. ${summary}`, "bad");
       } else if (ev.stopped === "time") {
         status(`stopped on the time budget — the page may be unfinished. ${summary}`, "bad");
+      } else if (ev.stopped === "context") {
+        status(`ran out of room to think — the page may be unfinished. ${summary}`, "bad");
       } else {
         status(summary);
       }

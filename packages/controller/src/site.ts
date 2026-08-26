@@ -22,7 +22,7 @@
  * there at all, and `cat >>` — the most natural thing a shell can do — is
  * exactly the right way to produce it.
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { validateBlock, checkMarkup, textFields, type Block } from "@perpetual/shared/blocks";
 import { sanitizeSvg } from "./svg.ts";
@@ -92,6 +92,37 @@ function metaFrom(id: string, raw: unknown): { meta: Page; problems: Problem[] }
   };
   return { meta, problems };
 }
+
+/**
+ * Has anything in this page changed since we last read it?
+ *
+ * The watcher re-reads the whole site every 120ms while a turn runs, and
+ * measured on real sessions that was 4–10ms each time for three pages: every
+ * file read, every line parsed, every figure sanitised, eight times a second,
+ * almost always to produce exactly what it produced before.
+ *
+ * The signature is the newest mtime of everything in the page's directory, not
+ * just page.ndjson — a figure can be regenerated without the block file being
+ * touched, and a page whose drawing changed has changed.
+ *
+ * `readdir` plus a stat per file is a handful of syscalls against a read and
+ * parse of every line, so a poll where nothing moved costs almost nothing.
+ */
+async function signature(dir: string): Promise<string> {
+  try {
+    const names = await readdir(dir);
+    const stats = await Promise.all(
+      names.map((n) => stat(join(dir, n)).then((s) => s.mtimeMs).catch(() => 0)),
+    );
+    return `${names.length}:${Math.max(0, ...stats)}`;
+  } catch { return "gone"; }
+}
+
+/**
+ * What a previous read produced, keyed by page id. Held by the caller (the
+ * watcher) rather than module-level, so two sessions never share one.
+ */
+export type SiteCache = Map<string, { sig: string; page: Page; problems: Problem[] }>;
 
 async function readPage(pagesDir: string, id: string): Promise<{ page: Page; problems: Problem[] }> {
   const problems: Problem[] = [];
@@ -274,7 +305,7 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
  * handful of small files, and correctness-by-rescan beats maintaining an
  * incremental index that can drift from the directory it describes.
  */
-export async function readSite(siteDir: string): Promise<Site> {
+export async function readSite(siteDir: string, cache?: SiteCache): Promise<Site> {
   const pagesDir = join(siteDir, PAGES_REL);
   let entries: string[] = [];
   try { entries = await readdir(pagesDir); } catch { return { pages: [], problems: [] }; }
@@ -298,10 +329,29 @@ export async function readSite(siteDir: string): Promise<Site> {
 
   const pages: Page[] = [];
   for (const id of valid) {
+    // With a cache, a page that has not been touched since the last read is
+    // reused whole — including the problems it raised, so a stale page does
+    // not go quiet just because nobody rewrote it.
+    if (cache) {
+      const sig = await signature(join(pagesDir, id));
+      const hit = cache.get(id);
+      if (hit && hit.sig === sig) {
+        pages.push(hit.page);
+        problems.push(...hit.problems);
+        continue;
+      }
+      const fresh = await readPage(pagesDir, id);
+      cache.set(id, { sig, page: fresh.page, problems: fresh.problems });
+      pages.push(fresh.page);
+      problems.push(...fresh.problems);
+      continue;
+    }
     const { page, problems: p } = await readPage(pagesDir, id);
     pages.push(page);
     problems.push(...p);
   }
+  // Pages that went away stop being remembered.
+  if (cache) for (const id of [...cache.keys()]) if (!valid.includes(id)) cache.delete(id);
 
   // One website: a link that points nowhere breaks the promise that every page
   // is reachable from every other, so it is checked here rather than trusted.

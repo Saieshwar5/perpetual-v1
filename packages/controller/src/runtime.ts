@@ -18,6 +18,32 @@ import { DEFAULT_TIMEOUT_SEC } from "./shell/tool.ts";
 
 export type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/**
+ * Ask for retries. Everything below this line was already switched off.
+ *
+ * pi-ai calls the provider SDK with `maxRetries: 0` on purpose — the SDKs'
+ * built-in retry timers ignore an AbortSignal, so a reader pressing stop would
+ * wait out a backoff that nobody could cancel. It replaces them with its own
+ * wrapper, which is cancellable and otherwise mirrors the SDK policy exactly.
+ *
+ * But that wrapper defaults to `maxRetries ?? 0`, and this file never passed a
+ * number. So all three layers of retry were off, and a single 429 or 503 —
+ * ordinary weather for a serverless endpoint — killed the whole turn. The
+ * reader lost their question and kept a half-written page that nothing owned
+ * finishing.
+ *
+ * The library already does the hard part: it retries 408/409/429/5xx and
+ * connection failures, never a 400 or a bad key, honours the server's own
+ * Retry-After, and backs off exponentially with jitter.
+ *
+ * The delay cap is the one judgement here. A provider that asks for longer
+ * than this fails immediately instead of waiting, because a turn has five
+ * minutes in total and a reader is watching a page that has stopped growing —
+ * a clear failure beats a silent two-minute stall.
+ */
+const MAX_RETRIES = 3;
+const MAX_RETRY_DELAY_MS = 30_000;
+
 export interface ToolCall { id: string; name: string; args: Record<string, unknown> }
 
 export type StepEvent =
@@ -44,6 +70,12 @@ export interface Conversation {
 export interface Runtime {
   readonly modelId: string;
   readonly providerId: string;
+  /**
+   * How much the model can hold, in tokens. Reported by the catalogue rather
+   * than guessed: the loop uses it to warn the agent before it runs out, and a
+   * number that is wrong in the optimistic direction is worse than none.
+   */
+  readonly contextWindow: number;
   conversation(opts: { system: string; sandboxNote: string }): Conversation;
 }
 
@@ -83,6 +115,12 @@ export const PROVIDERS: Record<string, {
  * the machinery stays deep. The description carries the two facts the model
  * cannot infer: that state is per-command, and where it is allowed to write.
  */
+/** Exported so a test can assert the turn asks for retries at all. */
+export const RETRY_POLICY = {
+  maxRetries: MAX_RETRIES,
+  maxRetryDelayMs: MAX_RETRY_DELAY_MS,
+} as const;
+
 export function shellTool(sandboxNote: string): Tool {
   return {
     name: "shell",
@@ -137,6 +175,7 @@ export function createRuntime(
   return {
     modelId,
     providerId,
+    contextWindow: model.contextWindow,
     conversation({ system, sandboxNote }) {
       const messages: Message[] = [];
       const tools = [shellTool(sandboxNote)];
@@ -159,6 +198,7 @@ export function createRuntime(
           const context: Context = { systemPrompt: system, messages, tools };
           const stream = models.streamSimple(model, context, {
             reasoning: effort ?? "low",
+            ...RETRY_POLICY,
             ...(signal ? { signal } : {}),
             ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
           } as never);
