@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""
+page — edit a page you have already written, by block name.
+
+WHY THIS EXISTS. The agent's only tool is a shell, and appending to a page is
+safe with it: `cat >> page.ndjson` is one command that cannot corrupt anything.
+EDITING was never safe. The documented way to replace one block was
+
+    grep -v '"id":"lead"' page.ndjson > /tmp/p     # deletes the line
+    ...                                            # and nothing puts it back
+    mv /tmp/p page.ndjson                          # in the same place
+
+which moves the block to the end of the page, and which reports success when
+the id is wrong and no line matched at all. Block identity, split-the-tail
+advice and in-place amendments all land on that operation, so it had to stop
+being improvised shell.
+
+WHAT IT GUARANTEES. That the FILE stays well-formed: one JSON object per line,
+written atomically, positions preserved, ids unique. It does NOT judge content
+— the controller's validator already reads every page and reports what is wrong
+with the blocks themselves, in a better voice than this could.
+
+Every failure prints what is wrong and what exists instead, and exits non-zero,
+because the thing this replaces failed silently.
+"""
+import json
+import os
+import re
+import sys
+
+PAGE_ID_RE = re.compile(r"^\d{3,}-[a-z0-9][a-z0-9-]*$")
+BLOCK_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def die(*lines):
+    for line in lines:
+        print(f"page: {line}" if line is lines[0] else f"      {line}", file=sys.stderr)
+    sys.exit(2)
+
+
+def pages_dir():
+    root = os.environ.get("PERPETUAL_SITE") or os.environ.get("HOME") or os.getcwd()
+    return os.path.join(root, "ui", "pages")
+
+
+def page_dir(page):
+    d = os.path.join(pages_dir(), page)
+    if not os.path.isdir(d):
+        have = sorted(
+            p for p in os.listdir(pages_dir())
+            if os.path.isdir(os.path.join(pages_dir(), p))
+        ) if os.path.isdir(pages_dir()) else []
+        die(f"no page called `{page}`.",
+            ("Pages here: " + ", ".join(have)) if have else "There are no pages yet.")
+    return d
+
+
+def read_blocks(page):
+    path = os.path.join(page_dir(page), "page.ndjson")
+    if not os.path.exists(path):
+        return []
+    blocks = []
+    with open(path, encoding="utf-8") as fh:
+        for n, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                b = json.loads(line)
+            except json.JSONDecodeError as e:
+                die(f"{page} line {n} is not valid JSON ({e.msg}).",
+                    "Nothing was changed. Fix that line first — one JSON object per line.")
+            if not isinstance(b, dict):
+                die(f"{page} line {n} is not a JSON object.", "Nothing was changed.")
+            blocks.append(b)
+    return blocks
+
+
+def write_blocks(page, blocks):
+    """Atomic, and beside the file rather than through /tmp.
+
+    A rename is only atomic within one filesystem, and /tmp inside the sandbox
+    is a tmpfs — so the `> /tmp/p && mv` pattern is a copy, and a reader can
+    catch it half-written. Writing the temp file in the page's own directory
+    makes the replace a true rename.
+    """
+    d = page_dir(page)
+    tmp = os.path.join(d, ".page.ndjson.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        for b in blocks:
+            fh.write(json.dumps(b, ensure_ascii=False) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, os.path.join(d, "page.ndjson"))
+
+
+def names(blocks):
+    return [b.get("id") for b in blocks if b.get("id")]
+
+
+def find(page, blocks, block_id):
+    for i, b in enumerate(blocks):
+        if b.get("id") == block_id:
+            return i
+    have = names(blocks)
+    die(f"no block named `{block_id}` on {page}.",
+        ("Blocks here: " + ", ".join(have)) if have
+        else "No block on this page has an `id`. Give them names first — "
+             "`id` is what lets a later command change one block and nothing else.")
+
+
+def parse_block(raw):
+    """The block JSON, from the argument or from stdin.
+
+    `-` reads stdin, which is the way out of quoting trouble: a block whose
+    text contains an apostrophe cannot be single-quoted, and double-quoting
+    hands the JSON to the shell to mangle. A heredoc has neither problem, and
+    it is the pattern the rules already teach for writing pages:
+
+        page set 003-margins lead - <<'JSON'
+        {"kind":"prose","text":"It doesn't fit in single quotes."}
+        JSON
+    """
+    if raw == "-":
+        raw = sys.stdin.read().strip()
+        if not raw:
+            die("nothing arrived on stdin.",
+                "With `-` the block is read from stdin — pipe it or use a heredoc.")
+    try:
+        b = json.loads(raw)
+    except json.JSONDecodeError as e:
+        die(f"the block you passed is not valid JSON ({e.msg}).",
+            "Wrap it in single quotes so the shell leaves the double quotes alone,",
+            "or pass `-` and give it on stdin with a heredoc.")
+    if not isinstance(b, dict):
+        die("the block you passed is not a JSON object.")
+    if not isinstance(b.get("kind"), str) or not b["kind"]:
+        die("the block you passed has no `kind`.")
+    return b
+
+
+def check_new_id(page, blocks, block_id, allow_index=None):
+    if not BLOCK_ID_RE.match(block_id):
+        die(f"`{block_id}` is not a usable id.",
+            "Lowercase letters, digits and dashes, up to 40 characters.")
+    for i, b in enumerate(blocks):
+        if b.get("id") == block_id and i != allow_index:
+            die(f"`{block_id}` is already the name of another block on {page}.",
+                "Ids name one block each — that is what makes them addressable.")
+
+
+def require_id_if_named(page, blocks, b):
+    """A named page must stay fully named, or it stops being reconciled by name."""
+    fully_named = bool(blocks) and all(x.get("id") for x in blocks)
+    if fully_named and not b.get("id"):
+        die("every block on this page has an `id`, and the one you are inserting "
+            "does not.",
+            "Ids are all-or-nothing per page: one unnamed block and every later "
+            "change rebuilds the whole page instead of the block that changed.")
+
+
+def ok(msg):
+    print(f"page: {msg}")
+
+
+# ----------------------------------------------------------------- commands
+
+def cmd_ls(page):
+    blocks = read_blocks(page)
+    if not blocks:
+        ok(f"{page} has no blocks yet.")
+        return
+    for i, b in enumerate(blocks):
+        text = b.get("text") or b.get("prompt") or ""
+        if not text and b.get("items"):
+            first = b["items"][0]
+            text = first if isinstance(first, str) else ""
+        summary = (text[:52] + "…") if len(text) > 52 else text
+        print(f"  {i:>2}  {b.get('id') or '—':<20} {b['kind']:<9} {summary}")
+
+
+def cmd_set(page, block_id, raw):
+    blocks = read_blocks(page)
+    i = find(page, blocks, block_id)
+    b = parse_block(raw)
+    # Keeping the name is the point: a replacement that loses its id is a
+    # different block, and the reader's page is rebuilt instead of amended.
+    b.setdefault("id", block_id)
+    if b["id"] != block_id:
+        die(f"you asked to replace `{block_id}` but the block you passed is named "
+            f"`{b['id']}`.",
+            "Either name it the same, or leave `id` out and it keeps the name.")
+    check_new_id(page, blocks, b["id"], allow_index=i)
+    blocks[i] = b
+    write_blocks(page, blocks)
+    ok(f"{page} · replaced `{block_id}` at position {i} · {len(blocks)} blocks")
+
+
+def cmd_insert(page, block_id, raw, where):
+    blocks = read_blocks(page)
+    i = find(page, blocks, block_id)
+    b = parse_block(raw)
+    require_id_if_named(page, blocks, b)
+    if b.get("id"):
+        check_new_id(page, blocks, b["id"])
+    at = i + 1 if where == "after" else i
+    blocks.insert(at, b)
+    write_blocks(page, blocks)
+    ok(f"{page} · inserted `{b.get('id') or b['kind']}` {where} `{block_id}` "
+       f"at position {at} · {len(blocks)} blocks")
+
+
+def cmd_rm(page, block_id):
+    blocks = read_blocks(page)
+    i = find(page, blocks, block_id)
+    gone = blocks.pop(i)
+    write_blocks(page, blocks)
+    ok(f"{page} · removed `{block_id}` ({gone['kind']}) · {len(blocks)} blocks")
+
+
+def cmd_move(page, block_id, where, other_id):
+    blocks = read_blocks(page)
+    i = find(page, blocks, block_id)
+    if block_id == other_id:
+        die("a block cannot be moved relative to itself.")
+    b = blocks.pop(i)
+    j = find(page, blocks, other_id)
+    at = j + 1 if where == "--after" else j
+    blocks.insert(at, b)
+    write_blocks(page, blocks)
+    ok(f"{page} · moved `{block_id}` to position {at} ({where[2:]} `{other_id}`)")
+
+
+def cmd_split(page, from_id, into, title):
+    if not PAGE_ID_RE.match(into):
+        die(f"`{into}` is not a page id.",
+            'A page is numbered and slugged, like `004-volume-effects`.')
+    if os.path.isdir(os.path.join(pages_dir(), into)):
+        die(f"`{into}` already exists.", "Pick the next free number.")
+
+    blocks = read_blocks(page)
+    i = find(page, blocks, from_id)
+    tail, head = blocks[i:], blocks[:i]
+    if not head:
+        die("that would move the whole page.",
+            "Split from a block further down — the page you split has to keep a claim.")
+    if all(b["kind"] == "next" for b in tail):
+        die("that would move only the closing questions, which is not a page.",
+            "Split from the first block that belongs on the new page.")
+
+    fully_named = all(b.get("id") for b in blocks)
+
+    def free(stem, among):
+        """Ids are unique per PAGE, so each side is checked against its own."""
+        taken = set(names(among))
+        if stem not in taken:
+            return stem
+        n = 2
+        while f"{stem}-{n}" in taken:
+            n += 1
+        return f"{stem}-{n}"
+
+    # A page opens with its claim, so the new one is given one.
+    claim = {"kind": "heading", "text": title}
+    if fully_named:
+        claim["id"] = free("claim", tail)
+
+    src_meta = {}
+    meta_path = os.path.join(page_dir(page), "meta.json")
+    if os.path.exists(meta_path):
+        try:
+            src_meta = json.load(open(meta_path, encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            src_meta = {}
+
+    new_dir = os.path.join(pages_dir(), into)
+    os.makedirs(new_dir, exist_ok=True)
+    meta = {"title": title}
+    if isinstance(src_meta.get("ask"), str):
+        meta["ask"] = src_meta["ask"]
+    if isinstance(src_meta.get("layout"), str):
+        meta["layout"] = src_meta["layout"]
+    with open(os.path.join(new_dir, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh, ensure_ascii=False)
+    write_blocks(into, [claim] + tail)
+
+    # The page it came from keeps a way in. Written last, so a failure above
+    # never leaves a link pointing at a page that was not created.
+    link = {"kind": "link", "page": into, "text": title}
+    if fully_named:
+        link["id"] = free(f"to-{into.split('-', 1)[-1]}"[:40], head)
+    write_blocks(page, head + [link])
+    ok(f"{page} · moved {len(tail)} block(s) from `{from_id}` into {into}, "
+       f"and linked to it · {page} now has {len(head) + 1}, {into} has {len(tail) + 1}")
+
+
+USAGE = """page — edit a page you have already written, by block name.
+
+  page ls     <page>
+  page set    <page> <id> '<json>'          replace that block, in place
+  page after  <page> <id> '<json>'          insert after that block
+  page before <page> <id> '<json>'          insert before that block
+  page rm     <page> <id>                   remove that block
+  page move   <page> <id> --after|--before <other>
+  page split  <page> --from <id> --into <new-page-id> '<title>'
+
+The block JSON goes in SINGLE quotes, or pass `-` to read it from stdin:
+
+  page set 003-margins lead - <<'JSON'
+  {"kind":"prose","id":"lead","text":"It doesn't fit in single quotes."}
+  JSON
+
+Appending is still just `cat >> ui/pages/<page>/page.ndjson`, and creating a
+page is still mkdir plus meta.json. This is only for changing what is there."""
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd == "ls" and len(rest) == 1:
+            return cmd_ls(*rest)
+        if cmd == "set" and len(rest) == 3:
+            return cmd_set(*rest)
+        if cmd in ("after", "before") and len(rest) == 3:
+            return cmd_insert(rest[0], rest[1], rest[2], cmd)
+        if cmd == "rm" and len(rest) == 2:
+            return cmd_rm(*rest)
+        if cmd == "move" and len(rest) == 4 and rest[2] in ("--after", "--before"):
+            return cmd_move(rest[0], rest[1], rest[2], rest[3])
+        if cmd == "split" and len(rest) == 6 and rest[1] == "--from" and rest[3] == "--into":
+            return cmd_split(rest[0], rest[2], rest[4], rest[5])
+    except OSError as e:
+        die(f"could not write the page ({e}).")
+    # Almost always the same mistake: unquoted JSON, which the shell splits on
+    # spaces and strips the quotes from. Worth naming, because the generic
+    # usage dump does not tell the agent what it actually did wrong.
+    if cmd in ("set", "after", "before") and len(rest) > 3:
+        die("the block JSON was split by the shell.",
+            "It arrived as " + str(len(rest) - 2) + " separate arguments, which means it",
+            "was not quoted. Wrap it in single quotes:",
+            "",
+            "  page " + cmd + " <page> <id> '{\"kind\":\"prose\",\"text\":\"…\"}'",
+            "",
+            "or pass `-` and give it on stdin with a heredoc.")
+    die(f"do not understand `{' '.join(argv)}`.", "", *USAGE.splitlines())
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]) or 0)
