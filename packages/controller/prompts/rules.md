@@ -47,9 +47,10 @@ Check the page **once, when you have finished it** — not after every append.
 You have a limited number of commands per turn, and a verification pass you
 repeat is a paragraph you did not get to write.
 
-To revise a page, rewrite the file and move it into place
-(`... > /tmp/p && mv /tmp/p ui/pages/001-x/page.ndjson`). The reader's view
-updates without losing their place.
+To change a page that already exists, use the `page` program (see **Changing a
+page you already wrote**). The reader's view updates without losing their
+place — and if every block on the page has an `id`, only the block you changed
+is redrawn.
 
 Optionally add `"layout"` to `meta.json` when a page needs more room than the
 default page: `"wide"` (a wider page — text and figures both), `"split"`
@@ -74,19 +75,53 @@ Names are lowercase letters, digits and dashes (`lead`, `cost-table`,
 `step-2`), and they should say what the block IS, not where it sits: `summary`
 survives being moved down the page, `block-3` does not.
 
-This is what makes amending cheap. To fix a number in one paragraph of a
-written page, rewrite only the line whose `id` is that paragraph:
+When the user asks about a block you named, you are told its name. Changing
+that one block is almost always the right answer — it is faster for you and it
+does not disturb the reader.
 
-```bash
-# replace one named line, leave the rest of the page untouched
-grep -v '"id":"lead"' page.ndjson > /tmp/p
-# ... write the corrected line into /tmp/p in the same position ...
-mv /tmp/p ui/pages/003-margins/page.ndjson
+## Changing a page you already wrote
+
+Use `page`. It is a program on your PATH, and it is the only safe way to change
+a page that exists: it keeps positions, keeps ids unique, writes the file
+atomically, and tells you what is there when you name something that is not.
+
+```
+page ls     <page>                             what is on it, with names
+page set    <page> <id> '<json>'               replace that block, in place
+page after  <page> <id> '<json>'               insert after that block
+page before <page> <id> '<json>'               insert before that block
+page rm     <page> <id>                        remove that block
+page move   <page> <id> --after|--before <other>
+page split  <page> --from <id> --into <new-page-id> '<title>'
 ```
 
-When the user asks about a block you named, you are told its name. Rewriting
-that one line is almost always the right answer — it is faster for you and it
-does not disturb the reader.
+```bash
+page set 003-margins numbers '{"kind":"metrics","items":[{"value":"39%","label":"Gross margin"}]}'
+page after 003-margins how '{"kind":"note","id":"caveat","text":"Q2 is provisional.","tone":"warn"}'
+page split 003-margins --from by-quarter --into 004-volume 'How volume moves the margin'
+```
+
+The JSON goes in **single quotes**. If the text contains an apostrophe, pass
+`-` and give the block on stdin instead:
+
+```bash
+page set 003-margins lead - <<'JSON'
+{"kind":"prose","id":"lead","text":"It doesn't fit in single quotes."}
+JSON
+```
+
+`set` keeps the block's name for you, so you can leave `id` out of the
+replacement. `split` moves everything from that block to the end of the page
+into a new page, gives it the title as its claim, and leaves a `link` behind —
+which is what to do when you are told a page runs long.
+
+**Do not edit a page with `grep`, `sed` or `mv`.** Deleting a line and
+appending the new one moves the block to the END of the page, and a `grep -v`
+that matches nothing succeeds and changes nothing — you would be told it
+worked. `page` fails loudly instead.
+
+Writing a NEW page is unchanged: `mkdir`, write `meta.json`, and
+`cat >> page.ndjson` one block at a time.
 
 ## The blocks
 

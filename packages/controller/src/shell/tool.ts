@@ -25,7 +25,7 @@
  */
 import { spawn } from "node:child_process";
 import { OutputAccumulator, formatResult, type Captured } from "./output.ts";
-import { wrapCommand, mountPath, type SandboxConfig } from "./sandbox.ts";
+import { wrapCommand, mountPath, toolsDir, type SandboxConfig } from "./sandbox.ts";
 
 export const DEFAULT_TIMEOUT_SEC = 120;
 const MAX_TIMEOUT_SEC = 600;
@@ -88,7 +88,16 @@ export function createShell(cfg: SandboxConfig) {
     const child = spawn(file, args, {
       detached: true,                     // own process group — see (3) above
       stdio: ["ignore", "pipe", "pipe"],
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },   // only bwrap sees this
+      // Only bwrap sees this — except in unsafe mode, where there is no bwrap
+      // and this IS the command's environment, so the agent's own programs
+      // have to be reachable here too.
+      env: cfg.unsafe
+        ? {
+            PATH: `${toolsDir()}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+            HOME: cfg.root,
+            PERPETUAL_SITE: cfg.root,
+          }
+        : { PATH: process.env.PATH ?? "/usr/bin:/bin" },
     });
 
     let killed = false;

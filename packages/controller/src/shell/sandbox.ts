@@ -20,9 +20,27 @@
  *      lacks it, which is exactly the machine where it matters.
  */
 import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** Where the session directory appears from inside the sandbox. */
 export const MOUNT = "/session";
+
+/**
+ * Where the agent's own programs appear, and where they come from.
+ *
+ * NOT a second tool. The agent still has exactly one — the shell — and this is
+ * a directory on its PATH, the way /usr/bin already is. The distinction
+ * matters: a tool is something the model calls through the schema and can
+ * therefore be argued into misusing; a program is something it runs, which
+ * fails with a message and an exit code like everything else in a shell.
+ *
+ * Read-only, and outside the one writable path, so the agent cannot rewrite
+ * the program that edits its pages.
+ */
+export const TOOLS_MOUNT = "/opt/perpetual/bin";
+export const toolsDir = () =>
+  join(dirname(fileURLToPath(import.meta.url)), "..", "..", "sandbox-bin");
 
 export interface SandboxConfig {
   /** Real path to the session's `site/` directory. */
@@ -48,7 +66,7 @@ export function bwrapAvailable(): boolean {
  */
 export function sandboxEnv(mount: string): Record<string, string> {
   return {
-    PATH: "/usr/local/bin:/usr/bin:/bin",
+    PATH: `${TOOLS_MOUNT}:/usr/local/bin:/usr/bin:/bin`,
     HOME: mount,
     LANG: "C.UTF-8",
     TERM: "dumb",
@@ -79,6 +97,8 @@ export function wrapCommand(script: string, cfg: SandboxConfig): { file: string;
     "--proc", "/proc",
     "--dev", "/dev",
     "--tmpfs", "/tmp",
+    // The agent's own programs: read-only, and outside the writable path.
+    "--ro-bind", toolsDir(), TOOLS_MOUNT,
     // The one writable path.
     "--bind", cfg.root, MOUNT,
     "--chdir", MOUNT,
