@@ -715,6 +715,94 @@ html[data-side="min"] .srow { justify-content: center; }
 .doc.lay-gallery > .figure { margin-bottom: 2.4rem; }
 .doc.lay-gallery > .figure .svgwrap { padding: 28px; }
 
+/* ============================================================= workspace */
+
+/* WHERE YOU WORK, beside where you read. The scroll is a record — sealed,
+   permanent; a workspace is the opposite on purpose, because a list of files
+   is something you work IN. It uses width, the abundant dimension, so the
+   conversation and the thing you are working on are both visible: half the
+   questions you ask are about what is in here. */
+:root { --panel: 30rem; }
+
+.app[data-panel="1"] .site,
+.app[data-panel="1"] .floathost { right: var(--panel); }
+
+.panel-app {
+  position: absolute; inset: 0 0 0 auto; width: var(--panel); z-index: 26;
+  display: flex; flex-direction: column;
+  background: var(--surface); border-left: 1px solid var(--line);
+}
+/* Some work wants the whole window. Reading does not stop mattering, so this
+   is a state the reader chooses rather than one the agent can impose. */
+.panel-app.wide { width: calc(100% - var(--side)); }
+.panel-app.busy { opacity: .72; pointer-events: none; }
+
+.phead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--line);
+}
+.ptitle { font-weight: 500; font-size: .92rem; }
+.pview {
+  font-family: var(--mono); font-size: .64rem; color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
+}
+.phead .pwide { margin-left: auto; }
+
+.ptabs { display: flex; gap: 4px; padding: 8px 10px 0; }
+.ptab {
+  background: none; border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 11px; font-size: .76rem; color: var(--ink-3);
+}
+.ptab.on { border-color: var(--accent); color: var(--accent); }
+
+.pbody { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+/* The block styles are the page's, at the panel's size: a workspace is built
+   from the same vocabulary, which is most of why it costs so little to have. */
+.pdoc {
+  padding: 16px; font-size: calc(.94rem * var(--type));
+}
+.pdoc > * { margin-bottom: 1rem; }
+.pdoc h1 { font-size: 1.3em; margin-top: 0; }
+.pdoc h2 { font-size: 1.05em; }
+/* A row that acts is a row you can click, and it should look like one. On a
+   page the options sit side by side, because a choice is an aside in a
+   document — two or three things to weigh. Here the list IS the interface, so
+   the rows go full width and stack, and you scan them the way you scan an
+   inbox. */
+.pdoc .copts { flex-direction: column; gap: 6px; }
+.pdoc .copt { flex: 1 1 auto; width: 100%; padding: 10px 12px; }
+.pdoc .copt:hover { transform: none; }
+
+.pnote {
+  padding: 10px 16px; border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: .7rem; color: var(--ink-3);
+  white-space: pre-wrap; max-height: 6em; overflow: auto;
+}
+.pnote.bad { color: var(--warn); }
+
+/* Its own input. What you type in the middle is about the site; what you type
+   here is about the work in front of you, and the agent is told which. */
+.pask { border-top: 1px solid var(--line); padding: 10px; }
+.pask form {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px;
+  padding: 8px 12px;
+}
+.pask form:focus-within { border-color: var(--accent); }
+.pask input {
+  flex: 1; min-width: 0; background: none; border: 0; outline: none;
+  font: inherit; font-size: .85rem; color: var(--ink);
+}
+.pask input::placeholder { color: var(--ink-3); }
+
+@media (max-width: 1100px) {
+  /* No room to split: the workspace covers the site rather than squeezing it
+     into a column too narrow to read. */
+  .panel-app { width: calc(100% - var(--side)); }
+  .app[data-panel="1"] .site,
+  .app[data-panel="1"] .floathost { right: 0; }
+}
+
 /* ----------------------------------------------------------- revisions */
 
 /* The agent cannot unwrite what it published, so a correction is a new block

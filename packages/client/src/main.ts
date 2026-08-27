@@ -24,12 +24,14 @@ import { appendBlock, renderBlock, type BlockActions } from "./render.ts";
 import { runTurn, type WireEvent } from "./stream.ts";
 import { Flow } from "./flow.ts";
 import { Sidebar } from "./side.ts";
+import { AppPanel } from "./apps.ts";
 import { Composer } from "./composer.ts";
 import { mountSettings, load as loadSettings } from "./settings.ts";
 import { measureFlow } from "./measure.ts";
 import { describeCommand, activityLine } from "./activity.ts";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
-import type { Anchor, Page, Selection, Site, SessionIndex } from "@perpetual/shared/site";
+import type { Anchor, AppView, Page, Selection, Site, SessionIndex }
+  from "@perpetual/shared/site";
 import type { RenderReport } from "@perpetual/shared/render";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -42,6 +44,7 @@ const sideHost = $("side");
 
 const flow = new Flow(flowHost);
 const side = new Sidebar(sideHost, $("sessions"), $<HTMLInputElement>("sidesearch"));
+const panel = new AppPanel($("apppanel"));
 const composer = new Composer($("pill"), $("floathost"));
 
 let sessionId: string | null = null;
@@ -394,6 +397,86 @@ flow.onChange = (i, id) => {
 flow.onScroll = () => placeComposer();
 
 /**
+ * A workspace opening or closing changes the frame the site has, so the site
+ * has to be told. The sidebar collapses to its strip at the same time: three
+ * columns of chrome and content do not fit a laptop, and the one that can be
+ * spared is the one holding a list you are not currently reading.
+ */
+panel.onLayout = (open) => {
+  appEl.dataset.panel = open ? "1" : "";
+  if (open && document.documentElement.dataset.side !== "min") {
+    document.documentElement.dataset.side = "min";
+    sideWasWide = true;
+  } else if (!open && sideWasWide) {
+    document.documentElement.dataset.side = "";
+    sideWasWide = false;
+  }
+  placeComposer();
+};
+/** Did WE collapse the sidebar to make room? Only then may we put it back. */
+let sideWasWide = false;
+
+/**
+ * A row that carries its own command. No model, no turn, no cost — the
+ * controller runs it in the same sandbox and hands back what the view became.
+ */
+async function runRow(app: string, block: string, option: string) {
+  if (!sessionId || composer.busy) return;
+  panel.working(true);
+  panel.note("");
+  try {
+    const r = await fetch(`/sessions/${sessionId}/act`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ app, block, option }),
+    });
+    const out = await r.json() as {
+      ran?: boolean; exitCode?: number; output?: string;
+      app?: AppView | null; error?: string;
+    };
+    if (out.error) { panel.note(out.error, true); return; }
+    if (out.app) panel.set(out.app);
+    // A command that failed says so, with the tail that explains it. Silence
+    // would look exactly like a row that does nothing.
+    if (out.ran && out.exitCode !== 0) {
+      panel.note(out.output?.trim() || `that did not work (exit ${out.exitCode})`, true);
+    }
+  } catch (e) {
+    panel.note(e instanceof Error ? e.message : String(e), true);
+  } finally {
+    panel.working(false);
+  }
+}
+
+panel.onRun = (app, block, option) => void runRow(app, block, option);
+
+panel.onAsk = (selection) => {
+  pendingSelection = selection;
+  void composer.send(`${selection.prompt ? `${selection.prompt} — ` : ""}${selection.label}`);
+};
+
+/**
+ * The panel's own composer. One turn engine, two places to start one: what you
+ * type in the middle is about the site, what you type here is about the work,
+ * and the turn message is told which.
+ */
+panel.onSubmit = (app, text) => {
+  pendingSelection = { app, page: app, control: "typed", option: "typed", label: text };
+  void composer.send(text);
+};
+
+/**
+ * Closing is the reader's, and closing means GONE: the directory goes with it.
+ * A workspace that comes back on reload was not closed, it was hidden.
+ */
+panel.onClose = (app) => {
+  panel.remove(app);
+  if (!sessionId) return;
+  void fetch(`/sessions/${sessionId}/apps?app=${encodeURIComponent(app)}`,
+    { method: "DELETE" }).catch(() => {});
+};
+
+/**
  * Is the reader out of website?
  *
  * The composer used to inflate at the bottom of EVERY page, because every page
@@ -576,9 +659,9 @@ function currentAnchor(): Anchor | undefined {
   const mid = flowHost.getBoundingClientRect().top + flowHost.clientHeight / 2;
   let bestPage: string | undefined;
   let best = -1, bestGap = Infinity;
-  for (const panel of flowHost.querySelectorAll<HTMLElement>(".panel")) {
-    const doc = panel.querySelector<HTMLElement>(".doc");
-    const page = panel.dataset.page;
+  for (const section of flowHost.querySelectorAll<HTMLElement>(".panel")) {
+    const doc = section.querySelector<HTMLElement>(".doc");
+    const page = section.dataset.page;
     if (!doc || !page) continue;
     for (const [i, node] of [...doc.children].entries()) {
       const r = node.getBoundingClientRect();
@@ -632,6 +715,7 @@ async function newSession(opts: { focus?: boolean } = {}) {
   location.hash = "";
   side.setActive(null);
   side.setSections([]);
+  panel.clear();
   flowHost.replaceChildren(emptyState());
   appEl.dataset.empty = "1";
   composer.compact(false);
@@ -730,12 +814,16 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   pages = [];
   if (!opts.starting) pendingTurn = null;
 
-  const [index, site] = await Promise.all([
+  const [index, site, apps] = await Promise.all([
     fetch(`/sessions/${id}`).then((r) => r.json()) as Promise<SessionIndex>,
     fetch(`/sessions/${id}/site`).then((r) => r.json()) as Promise<Site>,
+    fetch(`/sessions/${id}/apps`).then((r) => r.json()) as Promise<{ apps: AppView[] }>,
   ]);
   side.setActive(id);
   side.rename(id, index.title);
+  // A workspace belongs to its session, so it comes back with it — and never
+  // travels to another one.
+  panel.setAll(apps.apps ?? []);
   answered = index.answered ?? {};
   chosen = index.chosen ?? {};
   for (const p of site.pages) addPage(p);
@@ -928,6 +1016,23 @@ function handle(ev: WireEvent) {
       flow.remove(ev.page);
       pages = pages.filter((p) => p.id !== ev.page);
       paintSide();
+      break;
+
+    // The workspace tree, watched exactly like the site and arriving down the
+    // same channel. Whole views, not block ops: a view is meant to be replaced.
+    case "app_open":
+      panel.set(ev.app);
+      status(`opened ${ev.app.title.toLowerCase()}`, "work");
+      break;
+
+    case "app_view":
+      // Not focused: the agent updating a workspace the reader has tabbed away
+      // from should not drag them back to it.
+      panel.set(ev.app, { focus: false });
+      break;
+
+    case "app_close":
+      panel.remove(ev.app);
       break;
 
     case "problem":
@@ -1140,6 +1245,7 @@ composer.onSubmit = async (q) => {
   clearAim();
   think = "";
   composer.working(q);
+  panel.working(true);
   // The question goes on screen before anything answers it. Without this the
   // site sits exactly as it was until the agent's first block lands, and the
   // reader has no evidence their question went anywhere.
@@ -1169,6 +1275,7 @@ composer.onSubmit = async (q) => {
       pendingTurn = null;
     }
     composer.done();
+    panel.working(false);
     placeComposer();
     void loadSessions();
   }

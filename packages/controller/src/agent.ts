@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 import { createShell } from "./shell/tool.ts";
 import { describeSandbox, mountPath, type SandboxConfig } from "./shell/sandbox.ts";
 import { SiteWatcher } from "./watcher.ts";
+import { AppWatcher } from "./apps.ts";
 import { readSite } from "./site.ts";
 import { systemPrompt, turnMessage, NUDGE } from "./context.ts";
 import type { Runtime, Effort } from "./runtime.ts";
@@ -157,6 +158,9 @@ class EventQueue {
 export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: Promise<TurnSummary> } {
   const q = new EventQueue();
   const watcher = new SiteWatcher(o.sandbox.root);
+  // The second tree: workspaces. Watched the same way and streamed down the
+  // same channel, from the directory the seal does not reach.
+  const apps = new AppWatcher(o.sandbox.root);
   // The same list the sandbox mounts read-only. The mount is the guarantee;
   // this is the backstop for the unsandboxed path, and the thing that decides
   // what the reader keeps seeing when a write gets through anyway.
@@ -179,10 +183,11 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
     // Everything already on disk is the baseline: this turn's events describe
     // only what this turn changed.
     const site = await watcher.prime();
+    const openApps = await apps.prime();
     const before = new Set(site.pages.map((p) => p.id));
 
     const flush = async () => {
-      const evs = await watcher.poll();
+      const evs = [...await watcher.poll(), ...await apps.poll()];
       for (const e of evs) {
         if (e.type === "page_open" || e.type === "page_replace") touched.add(e.page.id);
         else if (e.type === "page_block" || e.type === "page_meta") touched.add(e.page);
@@ -209,7 +214,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
             : ""),
       });
       convo.user(turnMessage({
-        ask: o.ask, site, pastAsks: o.pastAsks,
+        ask: o.ask, site, pastAsks: o.pastAsks, apps: openApps,
         ...(o.anchor ? { anchor: o.anchor } : {}),
         ...(o.selection ? { selection: o.selection } : {}),
         ...(o.answered ? { answered: o.answered } : {}),
@@ -296,6 +301,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
           await flush();
           const notes = [
             watcher.drainFeedback(),
+            apps.drainFeedback(),
             o.notes?.drain() ?? null,
             contextNote(context, o.runtime.contextWindow),
             budgetNote(MAX_STEPS - steps - 1),

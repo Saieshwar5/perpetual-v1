@@ -78,6 +78,30 @@
        asked. -->
   <main class="site" id="site"></main>
 
+  <!-- The workspace: where you WORK with the agent, beside where you read what
+       it wrote. It appears when the agent opens one — a file search, a mail
+       list — and it is the one surface here that is allowed to change under
+       you, because working in something is not reading a record. -->
+  <section class="panel-app" id="apppanel" hidden aria-label="Workspace">
+    <header class="phead">
+      <span class="ptitle"></span>
+      <span class="pview"></span>
+      <button class="sidebtn pwide" type="button" aria-label="Widen the workspace">⤢</button>
+      <button class="sidebtn pclose" type="button" aria-label="Close the workspace">✕</button>
+    </header>
+    <div class="ptabs" hidden></div>
+    <div class="pbody"></div>
+    <div class="pnote" hidden></div>
+    <!-- Its own input, scoped to what is on screen here. What you type in the
+         middle is about the site; what you type here is about the work. -->
+    <div class="pask">
+      <form>
+        <input type="text" autocomplete="off" placeholder="Ask about this…" aria-label="Ask about this workspace">
+        <span class="enter">↵</span>
+      </form>
+    </div>
+  </section>
+
   <!-- Reader settings. Chrome, never the canvas: the agent cannot see or
        reach any of this. Anchored beside the sidebar's foot, where its
        button is. -->
