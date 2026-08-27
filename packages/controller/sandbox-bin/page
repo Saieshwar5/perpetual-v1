@@ -55,6 +55,31 @@ def page_dir(page):
     return d
 
 
+def writable(page):
+    """Is this section still yours to change?
+
+    Published sections are mounted READ-ONLY, so this asks the mount rather
+    than keeping a list of its own — there is no second copy of the truth to
+    drift, and nothing here the agent could edit to change the answer.
+    """
+    return os.access(page_dir(page), os.W_OK)
+
+
+def require_open(page, verb):
+    if writable(page):
+        return
+    die(f"`{page}` is published. It cannot be {verb}.",
+        "",
+        "Nothing you have written is ever unwritten — the reader keeps what they",
+        "read. Say it in a new section instead, and if what you write replaces a",
+        "block up there, name it on the new block:",
+        "",
+        '  {"kind":"prose","id":"fix","supersedes":"' + page + '/<block-id>",...}',
+        "",
+        "The old block stays where it is, marked as revised, with a link down to",
+        "yours.")
+
+
 def read_blocks(page):
     path = os.path.join(page_dir(page), "page.ndjson")
     if not os.path.exists(path):
@@ -180,6 +205,7 @@ def cmd_ls(page):
 
 
 def cmd_set(page, block_id, raw):
+    require_open(page, "changed")
     blocks = read_blocks(page)
     i = find(page, blocks, block_id)
     b = parse_block(raw)
@@ -197,6 +223,7 @@ def cmd_set(page, block_id, raw):
 
 
 def cmd_insert(page, block_id, raw, where):
+    require_open(page, "added to")
     blocks = read_blocks(page)
     i = find(page, blocks, block_id)
     b = parse_block(raw)
@@ -225,6 +252,7 @@ def cmd_append(page, raw):
     already in it: the doors stay at the foot, and nothing has to be
     remembered.
     """
+    require_open(page, "added to")
     blocks = read_blocks(page)
     b = parse_block(raw)
     require_id_if_named(page, blocks, b)
@@ -241,6 +269,7 @@ def cmd_append(page, raw):
 
 
 def cmd_rm(page, block_id):
+    require_open(page, "changed")
     blocks = read_blocks(page)
     i = find(page, blocks, block_id)
     gone = blocks.pop(i)
@@ -249,6 +278,7 @@ def cmd_rm(page, block_id):
 
 
 def cmd_move(page, block_id, where, other_id):
+    require_open(page, "rearranged")
     blocks = read_blocks(page)
     i = find(page, blocks, block_id)
     if block_id == other_id:
@@ -261,67 +291,11 @@ def cmd_move(page, block_id, where, other_id):
     ok(f"{page} · moved `{block_id}` to position {at} ({where[2:]} `{other_id}`)")
 
 
-def cmd_split(page, from_id, into, title):
-    if not PAGE_ID_RE.match(into):
-        die(f"`{into}` is not a page id.",
-            'A page is numbered and slugged, like `004-volume-effects`.')
-    if os.path.isdir(os.path.join(pages_dir(), into)):
-        die(f"`{into}` already exists.", "Pick the next free number.")
-
-    blocks = read_blocks(page)
-    i = find(page, blocks, from_id)
-    tail, head = blocks[i:], blocks[:i]
-    if not head:
-        die("that would move the whole page.",
-            "Split from a block further down — the page you split has to keep a claim.")
-    if all(b["kind"] == "next" for b in tail):
-        die("that would move only the closing questions, which is not a page.",
-            "Split from the first block that belongs on the new page.")
-
-    fully_named = all(b.get("id") for b in blocks)
-
-    def free(stem, among):
-        """Ids are unique per PAGE, so each side is checked against its own."""
-        taken = set(names(among))
-        if stem not in taken:
-            return stem
-        n = 2
-        while f"{stem}-{n}" in taken:
-            n += 1
-        return f"{stem}-{n}"
-
-    # A page opens with its claim, so the new one is given one.
-    claim = {"kind": "heading", "text": title}
-    if fully_named:
-        claim["id"] = free("claim", tail)
-
-    src_meta = {}
-    meta_path = os.path.join(page_dir(page), "meta.json")
-    if os.path.exists(meta_path):
-        try:
-            src_meta = json.load(open(meta_path, encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            src_meta = {}
-
-    new_dir = os.path.join(pages_dir(), into)
-    os.makedirs(new_dir, exist_ok=True)
-    meta = {"title": title}
-    if isinstance(src_meta.get("ask"), str):
-        meta["ask"] = src_meta["ask"]
-    if isinstance(src_meta.get("layout"), str):
-        meta["layout"] = src_meta["layout"]
-    with open(os.path.join(new_dir, "meta.json"), "w", encoding="utf-8") as fh:
-        json.dump(meta, fh, ensure_ascii=False)
-    write_blocks(into, [claim] + tail)
-
-    # The page it came from keeps a way in. Written last, so a failure above
-    # never leaves a link pointing at a page that was not created.
-    link = {"kind": "link", "page": into, "text": title}
-    if fully_named:
-        link["id"] = free(f"to-{into.split('-', 1)[-1]}"[:40], head)
-    write_blocks(page, head + [link])
-    ok(f"{page} · moved {len(tail)} block(s) from `{from_id}` into {into}, "
-       f"and linked to it · {page} now has {len(head) + 1}, {into} has {len(tail) + 1}")
+# `split` used to live here: it moved the tail of a page into a new one and
+# left a link behind. It cannot exist any more, because it is a DELETION from
+# the section it splits — the half it moves away stops being where the reader
+# read it. A section that runs long is now answered the way everything else is:
+# write the rest as the next section.
 
 
 USAGE = """page — edit a page you have already written, by block name.
@@ -333,7 +307,9 @@ USAGE = """page — edit a page you have already written, by block name.
   page before <page> <id> '<json>'          insert before that block
   page rm     <page> <id>                   remove that block
   page move   <page> <id> --after|--before <other>
-  page split  <page> --from <id> --into <new-page-id> '<title>'
+
+Only for a section you are writing THIS TURN. Everything published is
+read-only: add to the site, never unwrite it.
 
 The block JSON goes in SINGLE quotes, or pass `-` to read it from stdin:
 
@@ -365,8 +341,11 @@ def main(argv):
             return cmd_rm(*rest)
         if cmd == "move" and len(rest) == 4 and rest[2] in ("--after", "--before"):
             return cmd_move(rest[0], rest[1], rest[2], rest[3])
-        if cmd == "split" and len(rest) == 6 and rest[1] == "--from" and rest[3] == "--into":
-            return cmd_split(rest[0], rest[2], rest[4], rest[5])
+        if cmd == "split":
+            die("`split` is gone. Moving the tail of a section somewhere else is a",
+                "deletion from the section the reader already read.",
+                "",
+                "Write the rest as the next section instead.")
     except OSError as e:
         die(f"could not write the page ({e}).")
     # Almost always the same mistake: unquoted JSON, which the shell splits on

@@ -36,9 +36,10 @@ test("an anchored ask names the page and the block being looked at", () => {
   });
   assert.match(m, /asking from \*\*003-margin-analysis\*\* \("Margin analysis"\)/);
   assert.match(m, /a metrics block reading "\$4\.2M ARR", "18% growth"/);
-  // Not a hint any more: pointing at a section is what places the answer in it.
-  assert.match(m, /that is the section the answer belongs in/);
-  assert.match(m, /rather than writing a new one/);
+  // The anchor resolves the referent and nothing else: published sections are
+  // read-only, so it cannot place the answer anywhere.
+  assert.match(m, /published and cannot be changed/);
+  assert.match(m, /answer in a new section at the end/);
 });
 
 test("each block kind describes itself usefully", () => {

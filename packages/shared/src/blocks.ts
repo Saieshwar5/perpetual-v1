@@ -40,6 +40,17 @@
 export interface BlockBase {
   /** Lowercase, digits and dashes: `margin-trend`. Unique within its page. */
   id?: string;
+  /**
+   * What this block REPLACES, as `<page>/<block-id>`.
+   *
+   * The agent cannot unwrite a published section, so a correction is a new
+   * block that says what it corrects. Nothing is edited: the original stays on
+   * the page, exactly as written, and the reader is shown that it was revised
+   * and where the revision is. That is strictly more information than an edit
+   * left behind, because an edit destroys the fact that the first answer was
+   * wrong.
+   */
+  supersedes?: string;
 }
 
 export interface Heading extends BlockBase { kind: "heading"; text: string }
@@ -281,6 +292,14 @@ export function textFields(b: Block): { where: string; text: string; honoured: b
 /** See BlockBase. Kept beside the validator so the rule has one definition. */
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
+/**
+ * `<page>/<block-id>` — see BlockBase.supersedes.
+ *
+ * Only the SHAPE is checked here. Whether the page and the block exist is a
+ * property of the whole site, so it is checked where the site is read.
+ */
+export const REF_RE = /^[0-9]{3}-[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]{0,39}$/;
+
 const isRec = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -312,6 +331,14 @@ export function validateBlock(v: unknown): Valid<Block> {
       return bad(`\`id\` is ${JSON.stringify(v.id)}. An id is lowercase letters, ` +
         "digits and dashes, starting with a letter or digit, up to 40 characters — " +
         '`margin-trend`, `step-2`. It is a name you can refer to later.');
+    }
+  }
+
+  if (v.supersedes != null) {
+    if (typeof v.supersedes !== "string" || !REF_RE.test(v.supersedes)) {
+      return bad(`\`supersedes\` is ${JSON.stringify(v.supersedes)}. It names the block ` +
+        "this one replaces, as `<page>/<block-id>` — `002-cruise-altitude/burn`. " +
+        "The block it names must have an id.");
     }
   }
 

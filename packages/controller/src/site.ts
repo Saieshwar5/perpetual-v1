@@ -264,7 +264,8 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
     problems.push({
       page: id,
       message: `${blocks.length} blocks is too many for one section (max ${MAX_BLOCKS}). ` +
-               "Split it — sections are cheap, and one that long dominates the scroll.",
+               "Sections are cheap and one that long dominates the scroll — write the " +
+               "rest as the next section.",
     });
   }
 
@@ -358,6 +359,7 @@ export async function readSite(siteDir: string, cache?: SiteCache): Promise<Site
   // One website: a link that points nowhere breaks the promise that every page
   // is reachable from every other, so it is checked here rather than trusted.
   const ids = new Set(pages.map((p) => p.id));
+  const byId = new Map(pages.map((p) => [p.id, p]));
   for (const page of pages) {
     for (const b of page.blocks) {
       if (b.kind === "link" && !ids.has(b.page)) {
@@ -366,6 +368,35 @@ export async function readSite(siteDir: string, cache?: SiteCache): Promise<Site
           message: `link points at "${b.page}", which is not a page in this site. ` +
                    `Existing pages: ${[...ids].join(", ") || "(none)"}.`,
         });
+      }
+      // A correction that names nothing corrects nothing: the reader would be
+      // shown a revision of a block that was never marked as revised, which is
+      // worse than no marking at all. The SHAPE of the reference is checked in
+      // the block validator; only the site knows whether it resolves.
+      if (b.supersedes) {
+        const [refPage, refBlock] = b.supersedes.split("/") as [string, string];
+        const target = byId.get(refPage);
+        if (!target) {
+          problems.push({
+            page: page.id,
+            message: `\`supersedes\` names "${refPage}", which is not a section here. ` +
+                     `Sections: ${[...ids].join(", ") || "(none)"}.`,
+          });
+        } else if (!target.blocks.some((x) => x.id === refBlock)) {
+          const named = target.blocks.map((x) => x.id).filter(Boolean);
+          problems.push({
+            page: page.id,
+            message: `\`supersedes\` names \`${refBlock}\` on ${refPage}, and no block ` +
+                     `there is called that. Named blocks on ${refPage}: ` +
+                     `${named.join(", ") || "(none — it has no named blocks to supersede)"}.`,
+          });
+        } else if (b.supersedes === `${page.id}/${b.id ?? ""}`) {
+          problems.push({
+            page: page.id,
+            message: `\`${b.id}\` supersedes itself. A correction names the block it ` +
+                     "replaces, which has to be a different one.",
+          });
+        }
       }
     }
   }

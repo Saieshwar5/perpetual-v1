@@ -40,13 +40,28 @@ test("a highlighted phrase reaches the agent as a quote, not as the paragraph", 
   assert.match(msg, /Treat that as what "this" refers to/);
 });
 
-test("the block is still named, so an amendment knows which line to rewrite", () => {
+test("the block is still named, so a correction knows what to supersede", () => {
   const msg = turnMessage({
     ...base,
     anchor: { page: "002-cruise-altitude", index: 2, id: "density", quote: "30% as dense" },
   });
   assert.match(msg, /`density`/, "the quote narrows the aim; it does not replace the address");
-  assert.match(msg, /rewrite it in place/);
+  assert.match(msg, /"supersedes":"002-cruise-altitude\/density"/,
+    "the exact string to write, not a description of it");
+});
+
+test("an unnamed block cannot be superseded, and the agent is told so", () => {
+  const unnamed: Site = {
+    pages: [{
+      id: "002-cruise-altitude", title: "Cruise", tier: 1, layout: "column",
+      blocks: [{ kind: "prose", text: PARA }] as never,
+    }],
+    problems: [],
+  };
+  const msg = turnMessage({ ...base, site: unnamed,
+    anchor: { page: "002-cruise-altitude", index: 0 } });
+  assert.doesNotMatch(msg, /"supersedes"/);
+  assert.match(msg, /name the section in words/);
 });
 
 test("pointing at a block without highlighting says nothing about a quote", () => {

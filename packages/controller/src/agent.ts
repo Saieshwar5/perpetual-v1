@@ -157,6 +157,10 @@ class EventQueue {
 export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: Promise<TurnSummary> } {
   const q = new EventQueue();
   const watcher = new SiteWatcher(o.sandbox.root);
+  // The same list the sandbox mounts read-only. The mount is the guarantee;
+  // this is the backstop for the unsandboxed path, and the thing that decides
+  // what the reader keeps seeing when a write gets through anyway.
+  watcher.seal(o.sandbox.sealed ?? []);
   const shell = createShell(o.sandbox);
   const commands: string[] = [];
   const touched = new Set<string>();
@@ -198,7 +202,11 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
         system: await systemPrompt(),
         sandboxNote:
           `You are in ${mountPath(o.sandbox)} and it is the only writable place. ` +
-          `Sandbox: ${describeSandbox(o.sandbox)}.`,
+          `Sandbox: ${describeSandbox(o.sandbox)}.` +
+          (o.sandbox.sealed?.length
+            ? "\nEvery section already published is mounted READ-ONLY. You cannot " +
+              "change or delete one, by any means — add to the site instead."
+            : ""),
       });
       convo.user(turnMessage({
         ask: o.ask, site, pastAsks: o.pastAsks,

@@ -182,6 +182,75 @@ function repaintControls() {
 }
 
 /**
+ * Mark what has been revised, and what revised it.
+ *
+ * The agent cannot change a section once it is published — it corrects by
+ * writing a new block that names the one it replaces. That leaves the record
+ * complete, which is the point, but it would also leave a wrong sentence
+ * sitting up the page with nothing to say it had been corrected. Anyone
+ * scrolling past it later would read it as current.
+ *
+ * So the pair is drawn as a pair: the old block dims and gains a way DOWN to
+ * its revision, the new one gains a way BACK UP to what it replaced. Nothing
+ * is hidden and nothing is edited — this is decoration derived from the files,
+ * recomputed from scratch whenever the site changes, because a correction can
+ * name a block in a section rendered long before it.
+ */
+function paintRevisions() {
+  for (const n of flowHost.querySelectorAll(".revmark")) n.remove();
+  for (const n of flowHost.querySelectorAll(".superseded")) n.classList.remove("superseded");
+
+  for (const node of flowHost.querySelectorAll<HTMLElement>("[data-supersedes]")) {
+    const ref = node.dataset.supersedes!;
+    const [page, block] = ref.split("/");
+    const target = flowHost.querySelector<HTMLElement>(
+      `.panel[data-page="${page}"] [data-block-id="${block}"]`);
+    if (!target) continue;                       // the validator has already said so
+
+    target.classList.add("superseded");
+    target.append(revMark("Revised below ↓", () => {
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+      flash(node);
+    }));
+    node.append(revMark("Replaces what is above ↑", () => {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      flash(target);
+    }));
+  }
+}
+
+/**
+ * Debounced, because it is a whole-site pass and page events arrive one block
+ * at a time. Short — shorter than the render report's settle — so a correction
+ * is marked as soon as the block carrying it lands rather than at turn end.
+ */
+let revTimer: number | undefined;
+function scheduleRevisions() {
+  clearTimeout(revTimer);
+  revTimer = setTimeout(paintRevisions, 120) as unknown as number;
+}
+
+function revMark(text: string, go: () => void): HTMLElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "revmark";
+  b.textContent = text;
+  // The block underneath is clickable too — pointing at it is how you ask
+  // about it — so this must not be read as pointing at anything.
+  b.addEventListener("click", (e) => { e.stopPropagation(); go(); });
+  b.addEventListener("mouseup", (e) => e.stopPropagation());
+  return b;
+}
+
+/** Say "here" once, for someone who has just been sent across the site. */
+function flash(node: HTMLElement) {
+  node.classList.remove("found");
+  void node.offsetWidth;                          // restart the animation
+  node.classList.add("found");
+  setTimeout(() => node.classList.remove("found"), 1600);
+}
+
+/**
  * Tell the agent what its page turned out to look like.
  *
  * The one signal that never existed. The agent writes blocks and finds out
@@ -637,6 +706,7 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   // answer, and the reader scrolls back for the rest. Instantly, not smoothly:
   // a nine-section glide past work they have not read yet is scenery on the way
   // to where they asked to be.
+  paintRevisions();
   if (pages.length) {
     flow.toEnd({ animate: false });
     // And again once the browser has settled. Fonts and figures land after the
@@ -690,7 +760,7 @@ function stickToEnd(change: () => void) {
 function handle(ev: WireEvent) {
   // Anything that changes what a page looks like is worth re-measuring — the
   // agent is told about the page as it stands, not as it was when it opened.
-  if (ev.type.startsWith("page_")) scheduleReport();
+  if (ev.type.startsWith("page_")) { scheduleReport(); scheduleRevisions(); }
 
   switch (ev.type) {
     case "text_delta":
@@ -832,6 +902,9 @@ function handle(ev: WireEvent) {
       answered = ev.answered;
       chosen = ev.chosen ?? {};
       repaintControls();
+      // Repainting a control builds a new node, which drops any revision mark
+      // that was sitting on it.
+      scheduleRevisions();
       break;
 
     case "turn_end": {

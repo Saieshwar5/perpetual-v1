@@ -73,6 +73,10 @@ export interface BlockActions {
 export function renderBlock(b: Block, on: BlockActions = {}): HTMLElement {
   const node = buildBlock(b, on);
   if (b.id) node.dataset.blockId = b.id;
+  // What this block replaces, carried on the node so the site can be marked up
+  // in one pass afterwards. The marking cannot happen here: the block it names
+  // usually lives in another section, which may not be rendered yet.
+  if (b.supersedes) node.dataset.supersedes = b.supersedes;
   return node;
 }
 

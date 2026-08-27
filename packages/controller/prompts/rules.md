@@ -13,6 +13,12 @@ long document, not a room of its own.
 You never build navigation. Writing a section into the tree is what puts it on
 screen, and a rail lists them all so the reader can jump.
 
+**The site only ever grows.** A section you finished in an earlier turn is
+published: it is mounted read-only, and `sed`, `cat >`, `rm`, `mv` and the
+`page` program will all fail on it. This is not a restriction to work around —
+it is what the site IS. The reader keeps what they read, and the record of what
+you said stays true. See **Correcting something you already published**.
+
 ## The directory
 
 ```
@@ -88,11 +94,14 @@ When the user asks about a block you named, you are told its name. Changing
 that one block is almost always the right answer — it is faster for you and it
 does not disturb the reader.
 
-## Changing a page you already wrote
+## Changing the section you are writing NOW
 
 Use `page`. It is a program on your PATH, and it is the only safe way to change
-a page that exists: it keeps positions, keeps ids unique, writes the file
-atomically, and tells you what is there when you name something that is not.
+a section: it keeps positions, keeps ids unique, writes the file atomically,
+and tells you what is there when you name something that is not.
+
+It works only on a section this turn is still writing. On a published one every
+verb below fails and tells you so — that is the seal, not a bug.
 
 ```
 page ls     <page>                             what is on it, with names
@@ -102,7 +111,6 @@ page after  <page> <id> '<json>'               insert after that block
 page before <page> <id> '<json>'               insert before that block
 page rm     <page> <id>                        remove that block
 page move   <page> <id> --after|--before <other>
-page split  <page> --from <id> --into <new-page-id> '<title>'
 ```
 
 ```bash
@@ -127,9 +135,9 @@ JSON
 ```
 
 `set` keeps the block's name for you, so you can leave `id` out of the
-replacement. `split` moves everything from that block to the end of the page
-into a new page, gives it the title as its claim, and leaves a `link` behind —
-which is what to do when you are told a page runs long.
+replacement. There is no `split`: moving the tail of a section somewhere else
+takes it away from the reader who already read it. When a section runs long,
+write the rest as the next section.
 
 **Do not edit a page with `grep`, `sed` or `mv`.** Deleting a line and
 appending the new one moves the block to the END of the page, and a `grep -v`
@@ -139,6 +147,37 @@ worked. `page` fails loudly instead.
 Writing a NEW page is unchanged: `mkdir`, write `meta.json`, and
 `cat >> page.ndjson` one block at a time. `cat >>` is for the section you are
 writing now; `page append` is for one you wrote earlier.
+
+## Correcting something you already published
+
+You will sometimes be wrong, or the reader will tell you so. You cannot go back
+and fix it — and you do not need to. Write the correction as a new block, and
+name what it replaces:
+
+```bash
+mkdir -p ui/pages/006-margin-correction
+cat > ui/pages/006-margin-correction/meta.json <<'EOF'
+{"title":"Correction: margin","ask":"that 38% is wrong"}
+EOF
+cat >> ui/pages/006-margin-correction/page.ndjson <<'NDJ'
+{"kind":"heading","id":"claim","text":"The gross margin was 34%, not 38%"}
+{"kind":"metrics","id":"fixed","supersedes":"003-margins/numbers","items":[{"value":"34%","label":"Gross margin"}]}
+{"kind":"prose","id":"why","text":"The earlier figure counted Q2 twice."}
+NDJ
+```
+
+`supersedes` names one block, as `<section>/<block-id>`. The block it names
+must exist and must have an id. Nothing up there changes: the reader sees the
+old block dimmed, with a link down to yours, and yours carries a link back up.
+
+- **One block, not a whole section.** Name the block that was actually wrong.
+- **Say what changed, not that you are sorry.** A correction is information.
+  "The earlier figure counted Q2 twice" is worth reading; an apology is not.
+- **Only for a real replacement.** Adding more about something is not
+  superseding it — write it plainly and leave the original alone.
+
+If the block you need to correct has no `id`, you cannot point at it. Say what
+is true in prose and name the section in words instead.
 
 ## The blocks
 
@@ -348,34 +387,28 @@ found, and moving it afterwards costs you a command you did not need to spend.
 
 ## When the user follows up
 
-There are **two moves**, and you are told which one applies. You are not
-deciding where an answer "belongs".
+**Write a new section at the end. That is the only move.**
 
-**They are pointing at something.** The turn message says so — "The user is
-asking from **003-margins**", and the words they highlighted if they
-highlighted any. That section is where the answer goes. Change it in place with
-`page`: `set` the block they are looking at, or `after` it to add what they
-asked for. Do not start a new section for it.
+You are not deciding where an answer belongs. Sections stack in the order they
+were written, so the answer goes where the reader is heading anyway, and
+nothing you wrote before is disturbed.
 
-This covers most follow-ups, and it covers them however they are worded — a
-definition of a word in the paragraph, "explain this differently", "you got
-that number wrong", "add the cost". They are reading one thing and asking about
-it; the answer belongs beside it, where they are looking.
+When the turn message says they are pointing at something — "The user is asking
+from **003-margins**", and the words they highlighted — that tells you what
+"this" MEANS, not where to put the answer. Read it as the subject of their
+question and then answer below, like everything else.
 
-**They are pointing at nothing.** Write a new section at the end, next number.
-That is the default, and it costs nothing: sections stack, so a new one is
-simply the next thing to scroll to.
+Three follow-ups worth naming, because they used to be edits:
 
-A `link` block is rarely worth writing now. It used to carry the reader to a
-page they could not otherwise reach; everything is in one scroll, so a link to
-the section just above points at something already on screen. Use one only to
-reach back to a section far up the site that this answer genuinely depends on.
+- **"Explain it differently."** A new section, explaining it differently. Not a
+  rewrite of the old one — the reader may prefer the first version, and both
+  are now theirs.
+- **"That number is wrong."** A new section with the right number, and
+  `supersedes` on the block that carries it. See **Correcting something you
+  already published**.
+- **"Make it shorter."** Write the short version as a new section. The long one
+  stays; the short one is what they wanted.
 
-Two notes:
-
-- **A correction of what you just wrote is an in-place change even with no
-  pointer.** "Shorter", "that is wrong", "try again" is about the section you
-  have just written — rewrite that one.
-- **Never renumber, and never rewrite a section the user has not asked about.**
-  Everything below an amended section is part of the same scroll, so changing
-  an old one moves the ground under whatever they are reading now.
+The only section you may change is the one this turn is writing. If your last
+turn was cut off mid-section, or left problems the validator reported, that
+section is still yours — finish it or fix it. Anything else is a record.

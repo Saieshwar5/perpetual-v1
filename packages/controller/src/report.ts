@@ -99,6 +99,10 @@ export interface SessionReport {
   /** Turns that changed a page they did not create, and how. */
   amendments: Record<EditStyle, number>;
   amendmentTurns: number;
+  /** Blocks that name what they replace — the way a correction is made now. */
+  corrections: number;
+  /** Blocks that have been superseded by a later one. Never more than `corrections`. */
+  superseded: number;
   /** Real commands behind the risky counts, so a number can be looked into. */
   examples: { style: EditStyle; ask: string; command: string }[];
   stopped: Record<string, number>;
@@ -114,7 +118,7 @@ export interface Report {
 const emptyTotals = (): Report["totals"] => ({
   turns: 0, pages: 0, blocks: 0, namedBlocks: 0, fullyNamed: 0, partlyNamed: 0,
   kinds: {}, amendments: { "page-tool": 0, append: 0, rewrite: 0, "hand-edited": 0 },
-  amendmentTurns: 0, examples: [], stopped: {}, steps: [],
+  amendmentTurns: 0, corrections: 0, superseded: 0, examples: [], stopped: {}, steps: [],
 });
 
 /* ------------------------------------------------------------- the reading */
@@ -140,6 +144,7 @@ export async function reportOn(store: SessionStore, ids?: string[]): Promise<Rep
       kinds: {},
       amendments: { "page-tool": 0, append: 0, rewrite: 0, "hand-edited": 0 },
       amendmentTurns: 0,
+      corrections: 0, superseded: 0,
       examples: [],
       stopped: {}, steps: [],
     };
@@ -152,6 +157,19 @@ export async function reportOn(store: SessionStore, ids?: string[]): Promise<Rep
       else if (named > 0) s.partlyNamed++;
       for (const b of page.blocks) s.kinds[b.kind] = (s.kinds[b.kind] ?? 0) + 1;
     }
+
+    // Corrections. Published sections cannot be edited, so this is the only
+    // way the agent can say "that was wrong" — and counting it is how we find
+    // out whether it learned to, or whether it just stops correcting itself.
+    const revised = new Set<string>();
+    for (const page of site.pages) {
+      for (const b of page.blocks) {
+        if (!b.supersedes) continue;
+        s.corrections++;
+        revised.add(b.supersedes);
+      }
+    }
+    s.superseded = revised.size;
 
     // A page is CREATED by the first turn that touches it. Any later turn that
     // touches it again is amending something that already exists — which is
@@ -185,6 +203,7 @@ export async function reportOn(store: SessionStore, ids?: string[]): Promise<Rep
     totals.blocks += s.blocks; totals.namedBlocks += s.namedBlocks;
     totals.fullyNamed += s.fullyNamed; totals.partlyNamed += s.partlyNamed;
     totals.amendmentTurns += s.amendmentTurns;
+    totals.corrections += s.corrections; totals.superseded += s.superseded;
     totals.examples.push(...s.examples);
     totals.steps.push(...s.steps);
     for (const [k, n] of Object.entries(s.kinds)) totals.kinds[k] = (totals.kinds[k] ?? 0) + n;
@@ -236,10 +255,21 @@ export function format(r: Report): string {
   line("  redrawn on every change, and the reader sees the whole page flash.");
 
   line();
+  line("THE RECORD — does it correct itself without unwriting anything?");
+  line(`  corrections written ${String(t.corrections).padStart(4)}  blocks that name what they replace`);
+  line(`  blocks superseded   ${String(t.superseded).padStart(4)}  marked as revised, still on the page`);
+  if (t.corrections === 0) {
+    line("  Nothing corrected yet. Worth watching: a published section is read-only,");
+    line("  so an agent that cannot correct itself will quietly stop trying.");
+  }
+
+  line();
   line("EDITING — how does it change a page that already exists?");
+  line("  Under the seal this should be near zero: the only sections a turn may");
+  line("  change are the ones it is writing, plus one left open by a turn that");
+  line("  was cut short or left problems behind.");
   if (t.amendmentTurns === 0) {
     line("  No turn has ever changed a page it did not just create.");
-    line("  Nothing to judge yet — try asking a follow-up like \"that number is wrong\".");
   } else {
     for (const k of ["page-tool", "append", "rewrite", "hand-edited"] as EditStyle[]) {
       const n = t.amendments[k];

@@ -143,6 +143,21 @@ export interface Site {
 export interface SessionIndex {
   id: string;
   title: string;
+  /**
+   * Sections the last turn left UNSEALED, and the only ones the next turn may
+   * still write into.
+   *
+   * Published sections are read-only — the agent adds to the site and never
+   * unwrites it. Two things are not published, though, and would be damaged by
+   * being treated as if they were: a section whose turn was cut off before it
+   * finished, and one still carrying validation problems. Sealing those would
+   * make a half-written section permanent and forbid the agent from repairing
+   * its own mistake.
+   *
+   * Kept here, in the controller's own file, because the agent must not be
+   * able to decide what counts as published.
+   */
+  open?: string[];
   createdAt: string;
   updatedAt: string;
   pageCount: number;

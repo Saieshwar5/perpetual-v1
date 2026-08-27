@@ -62,7 +62,8 @@ function describe(p: PageRender, r: RenderReport): string | null {
     lines.push(
       `  ${p.page} runs ${p.screens} screens ${where}, so the reader scrolls ` +
       "that far before they reach anything else. Sections are cheap and long " +
-      "ones are not: consider splitting the tail into its own section.",
+      "ones are not — write the rest as the next section. (You cannot split " +
+      "this one afterwards: once the turn ends it is published.)",
     );
   }
 
