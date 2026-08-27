@@ -13,23 +13,23 @@
  *   1. MEASURED, NOT JUDGED. "2.4 screens" is a fact. "too long" is an
  *      opinion, and an agent that is told its work is bad without being told
  *      the number cannot tell whether it fixed it.
- *   2. THE READER'S CONDITIONS COME WITH IT. A page that scrolls may be a page
+ *   2. THE READER'S CONDITIONS COME WITH IT. A tall section may be a section
  *      that is too long, or a reader at XL text in a narrow window. Without
  *      the width and the dial, the agent starts writing for a viewport only
  *      one person has.
- *   3. ONCE PER PAGE PER TURN. The client re-measures on every block that
+ *   3. ONCE PER SECTION PER TURN. The client re-measures on every block that
  *      lands; saying the same thing five times as a page assembles would
  *      drown the tool output the agent actually needs to read.
  */
 import type { PageRender, RenderReport } from "@perpetual/shared/render";
 
-/** Below this, a page that scrolls is scrolling by a hair and not worth a word. */
+/** Below this, a section is over a screen by a hair and not worth a word. */
 const LONG_ENOUGH_TO_MENTION = 1.35;
 
 /** A queue the running turn drains into its next tool result. */
 export class NoteQueue {
   private items: string[] = [];
-  /** Pages already commented on, so a settling page is not reported five times. */
+  /** Sections already commented on, so a settling one is not reported five times. */
   private said = new Set<string>();
 
   /**
@@ -60,16 +60,9 @@ function describe(p: PageRender, r: RenderReport): string | null {
 
   if (p.fit === "scroll" && p.screens >= LONG_ENOUGH_TO_MENTION) {
     lines.push(
-      `  ${p.page} runs ${p.screens} screens ${where}, and two columns did not ` +
-      "rescue it — so the reader has to scroll inside the page before they can " +
-      "move past it. Pages are cheap and long pages are not: consider splitting " +
-      "the tail into its own page and linking to it.",
-    );
-  } else if (p.fit === "columns") {
-    lines.push(
-      `  ${p.page} did not fit in one column ${where} and was given two, which ` +
-      "it fits in. Nothing to fix — worth knowing, because a block added now " +
-      "may push it into scrolling.",
+      `  ${p.page} runs ${p.screens} screens ${where}, so the reader scrolls ` +
+      "that far before they reach anything else. Sections are cheap and long " +
+      "ones are not: consider splitting the tail into its own section.",
     );
   }
 

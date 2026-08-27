@@ -20,7 +20,8 @@ a probe file in the page, and prints whatever it returns.
 - `probe-measure.js` — the real characters-per-line, and how wide each kind of
                     block actually renders
 
-It found the adaptive-columns crossover (my estimate said four of five pages
-would fit; the first measurement said none did) and a click-to-anchor bug that
+It found the "instant" scroll that was quietly animating (`behavior: "auto"`
+means "ask CSS", and CSS said `smooth`, so every session opened halfway up its
+own site) and a click-to-anchor bug that
 no unit test would have caught — opening the composer recomputed the implicit
 anchor on top of the one the reader had just chosen.

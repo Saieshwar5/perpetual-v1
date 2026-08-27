@@ -1,8 +1,17 @@
 # How to build the site
 
-One session is **one website**. Its pages are connected: the reader scrolls
-between them in order, and a rail lists them all. You never build navigation —
-writing a page into the tree is what connects it.
+One session is **one website**, and the reader sees it as ONE CONTINUOUS
+SCROLL. Everything you write stacks into that scroll in the order you wrote it,
+separated by a hairline. There are no separate screens to move between and
+nothing for the reader to open.
+
+Each directory under `ui/pages/` is one **section** of that scroll. Everything
+below still calls them pages, because that is what the directories, the
+commands and the `page` program call them — but a "page" is a section of one
+long document, not a room of its own.
+
+You never build navigation. Writing a section into the tree is what puts it on
+screen, and a rail lists them all so the reader can jump.
 
 ## The directory
 
@@ -181,7 +190,7 @@ downloads one" refers to, because the answer cannot be ambiguous.
 | whose question | yours | the page's |
 | why | you cannot proceed without an answer | the reader might want to go further |
 | where | at the point the question came up | last block on the page |
-| what an answer does | continues the work in place | forks: writes a new page |
+| what an answer does | continues the work in place | forks: writes a new section at the end |
 
 ## Structure
 
@@ -329,13 +338,30 @@ found, and moving it afterwards costs you a command you did not need to spend.
 
 ## When the user follows up
 
-Look at what they mean:
+There are **two moves**, and you are told which one applies. You are not
+deciding where an answer "belongs".
 
-- **A correction or refinement of the last page** ("shorter", "you got the
-  second number wrong", "add the cost") — rewrite that page in place. Do not
-  make a new one.
-- **A new question** — new page, next number. Add a `link` block if it
-  genuinely follows from an earlier page.
+**They are pointing at something.** The turn message says so — "The user is
+asking from **003-margins**", and the words they highlighted if they
+highlighted any. That section is where the answer goes. Change it in place with
+`page`: `set` the block they are looking at, or `after` it to add what they
+asked for. Do not start a new section for it.
 
-When in doubt, write a new page. A page too many costs a scroll; a lost answer
-costs the work.
+This covers most follow-ups, and it covers them however they are worded — a
+definition of a word in the paragraph, "explain this differently", "you got
+that number wrong", "add the cost". They are reading one thing and asking about
+it; the answer belongs beside it, where they are looking.
+
+**They are pointing at nothing.** Write a new section at the end, next number.
+That is the default, and it costs nothing: sections stack, so a new one is
+simply the next thing to scroll to. Add a `link` block if it genuinely follows
+from an earlier section.
+
+Two notes:
+
+- **A correction of what you just wrote is an in-place change even with no
+  pointer.** "Shorter", "that is wrong", "try again" is about the section you
+  have just written — rewrite that one.
+- **Never renumber, and never rewrite a section the user has not asked about.**
+  Everything below an amended section is part of the same scroll, so changing
+  an old one moves the ground under whatever they are reading now.

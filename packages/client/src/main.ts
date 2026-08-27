@@ -7,20 +7,26 @@
  *   identical in every session, never generated. The agent does not know it
  *   exists.
  *
- *   THE CANVAS — the deck of pages in the middle. Rendered from files in the
- *   session directory and from nothing else.
+ *   THE CANVAS — the flow in the middle: one continuous scroll made of
+ *   sections, rendered from files in the session directory and from nothing
+ *   else.
  *
  * Every `page_*` event below came from the controller watching a directory, so
  * this file never has to decide whether to believe the agent. It renders what
  * was written.
+ *
+ * A note on the word "page". On disk and on the wire a section is still a
+ * page — `ui/pages/NNN-slug`, `page_open`, `page_block` — because that is what
+ * the agent writes and what the watcher reports. What changed is only how they
+ * are PRESENTED: stacked into one scroll instead of dealt out as a deck.
  */
 import { appendBlock, renderBlock, type BlockActions } from "./render.ts";
 import { runTurn, type WireEvent } from "./stream.ts";
-import { Deck } from "./deck.ts";
+import { Flow } from "./flow.ts";
 import { Rail } from "./rail.ts";
 import { Composer } from "./composer.ts";
 import { mountSettings, load as loadSettings } from "./settings.ts";
-import { fitAll, measureDeck } from "./fit.ts";
+import { measureFlow } from "./measure.ts";
 import { describeCommand, activityLine } from "./activity.ts";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
 import type { Anchor, Page, Selection, Site, SessionIndex } from "@perpetual/shared/site";
@@ -31,11 +37,13 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const libraryView = $("library");
 const sessionView = $("session");
 const grid = $("grid");
-const deckHost = $("deck");
+// `.site`, not `.flow`: the `flow` BLOCK (a sequence of steps) already owns
+// that class inside a page, and one of the two would have eaten the other.
+const flowHost = $("site");
 const railHost = $("rail");
 const titleEl = $("stitle");
 
-const deck = new Deck(deckHost);
+const flow = new Flow(flowHost);
 const rail = new Rail(railHost, $("railmid"));
 const composer = new Composer($("pill"), $("floathost"));
 const libHost = $("libhost");
@@ -75,7 +83,7 @@ let pendingSelection: Selection | undefined;
  */
 function actionsFor(page: string): BlockActions {
   return {
-    link: (id) => deck.gotoId(id),
+    link: (id) => flow.gotoId(id),
     // Old sessions recorded doors by question text alone. Read those too, so a
     // session from before the key changed still shows what was taken.
     answered: (q) => answered[doorKey(page, q)] ?? answered[q] ?? null,
@@ -118,47 +126,43 @@ const status = (text: string, tone: "" | "work" | "bad" = "") => composer.status
 
 /* ------------------------------------------------------------------ pages */
 
-/** Build one panel. `.sheet` is the scroller; the deck moves `.panel`. */
+/**
+ * Build one section.
+ *
+ * It used to carry a `.sheet` — an internal scroller, one per page, because
+ * each page was a frame with its own overflow. There is one scroller now, the
+ * flow itself, so a section is a plain block in normal flow and the browser
+ * lays them out end to end.
+ */
 function makePanel(page: Page) {
   const root = document.createElement("section");
   root.className = "panel";
-  const sheet = document.createElement("div");
-  sheet.className = "sheet";
   const doc = document.createElement("article");
   // The layout modes are the whole of "layout freedom" (plans/16 §7): four
   // compositions we style, rather than a stylesheet the agent writes.
   doc.className = `doc lay-${page.layout ?? "column"}`;
-  sheet.append(doc);
-  root.append(sheet);
+  root.append(doc);
   const acts = actionsFor(page.id);
   for (const b of page.blocks) appendBlock(doc, b, acts);
-  sheet.addEventListener("scroll", () => { if (page.id === deck.activeId) placeComposer(); },
-    { passive: true });
-  return { root, sheet, doc };
+  return { root, doc };
 }
 
 function addPage(page: Page, opts: { goto?: boolean } = {}) {
-  const { root, sheet, doc } = makePanel(page);
+  const { root, doc } = makePanel(page);
   root.dataset.page = page.id;
   doc.dataset.blocks = String(page.blocks.length);
-  deck.add({ id: page.id, root, scroller: sheet });
+  flow.add({ id: page.id, root });
   pages.push(page);
   paintRail();
-  if (opts.goto) deck.goto(deck.count - 1);
+  // A section that has just been opened is the one the reader wants to watch
+  // being written, and in a flow that is a scroll rather than a page turn.
+  if (opts.goto) flow.toEnd();
 }
 
 function docFor(id: string): HTMLElement | null {
-  return deckHost.querySelector<HTMLElement>(`.panel[data-page="${id}"] .doc`);
+  return flowHost.querySelector<HTMLElement>(`.panel[data-page="${id}"] .doc`);
 }
 
-/**
- * Decide one column, two, or scrolling — once the page has settled.
- *
- * Never mid-stream: a page that fits in one column at block 4 needs two by
- * block 9, and re-deciding on every arriving block would make it jump about
- * while the reader is watching it assemble. During a turn it stays single and
- * scrolls, which is exactly what it did before.
- */
 /**
  * Re-render every control. Their markup depends on what the reader has
  * ANSWERED, which lives in the session rather than in the page file — so
@@ -181,8 +185,8 @@ function repaintControls() {
  * Tell the agent what its page turned out to look like.
  *
  * The one signal that never existed. The agent writes blocks and finds out
- * whether they PARSE; it has never found out whether they fit. This measures
- * the deck as it currently stands and posts it to the running turn, where the
+ * whether they PARSE; it has never found out how tall they came out. This
+ * measures the flow as it currently stands and posts it to the running turn, where the
  * controller turns it into a note in the agent's next tool result — the same
  * channel a validation problem already arrives in, so the agent reads it where
  * it is already reading and can act on it before the turn ends.
@@ -197,7 +201,7 @@ let reportTimer: number | undefined;
 
 function reportRender() {
   if (!sessionId || !turn) return;
-  const { width, pages: measured } = measureDeck(deckHost, loadSettings().columns !== "off");
+  const { width, pages: measured } = measureFlow(flowHost);
   if (!measured.length) return;
   const report: RenderReport = { width, type: loadSettings().type, pages: measured };
   // Fire and forget. This is advice for the agent, not part of the turn: a
@@ -216,38 +220,36 @@ function scheduleReport() {
   reportTimer = setTimeout(reportRender, REPORT_SETTLE_MS) as unknown as number;
 }
 
-function refit() {
-  const tally = fitAll(deckHost, loadSettings().columns !== "off");
-  deckHost.dataset.fit = JSON.stringify(tally);
-}
-
 function paintRail() {
   rail.set(pages.map((p) => ({ id: p.id, ask: p.ask ?? "", title: p.title })));
-  rail.setActive(deck.index);
-  composer.position(pages.length ? `${deck.index + 1} / ${pages.length}` : "");
+  rail.setActive(flow.index);
+  composer.position(pages.length ? `${flow.index + 1} / ${pages.length}` : "");
 }
 
-deck.onChange = (i, id) => {
+flow.onChange = (i, id) => {
   rail.setActive(i);
   composer.position(pages.length ? `${i + 1} / ${pages.length}` : "");
-  // Moving to another page drops the aim. A block the reader has scrolled past
-  // is a reminder they can go back to; one on a page they have LEFT is a claim
-  // about something they are no longer looking at.
+  // Scrolling out of the section the aim lives in drops it to that section. A
+  // block the reader has scrolled past is a reminder they can go back to; one
+  // in a section they have LEFT is a claim about something they are no longer
+  // looking at.
   if (aim && aim.page !== id && !composer.busy) setAim({ page: id });
   placeComposer();
 };
 
+// The composer's size follows the scroll, and the scroll is now one scroller
+// rather than one per page — so this is a single subscription instead of a
+// listener attached to every panel as it was built.
+flow.onScroll = () => placeComposer();
+
 /**
  * Is the reader out of website?
  *
- * The composer used to inflate at the bottom of EVERY page, and that was the
- * wrong moment: the bottom of page 3 of 6 does not mean "you are finished, ask
- * something" — it means "keep going, there is more", and the gesture that
- * belongs there is the force-scroll to page 4. Interrupting it with a full
- * input box argues against the one movement the product is built around.
- *
- * The bottom of the LAST page is different. There is nothing left to scroll
- * to, so asking is honestly the next step.
+ * The composer used to inflate at the bottom of EVERY page, because every page
+ * was a scroller with its own bottom, and the bottom of page 3 of 6 does not
+ * mean "you are finished, ask something". In a flow the question is honest and
+ * singular: there is one bottom, and reaching it means there is nothing left to
+ * read — which is exactly when asking is the next step.
  */
 let atSiteEnd = false;
 
@@ -261,20 +263,16 @@ let atSiteEnd = false;
  * All of that is now a class on one element.
  */
 function placeComposer() {
-  const id = deck.activeId;
-  const sheet = id ? deckHost.querySelector<HTMLElement>(`.panel[data-page="${id}"] .sheet`) : null;
-  const lastPage = deck.count === 0 || deck.index === deck.count - 1;
-  // Read from scroll position and page index only — never from the composer's
-  // own height, which changes as a result of this decision and would oscillate.
-  const atBottom = !sheet || sheet.scrollTop + sheet.clientHeight >= sheet.scrollHeight - 24;
-  atSiteEnd = lastPage && atBottom;
+  // Read from the scroller only — never from the composer's own height, which
+  // changes as a result of this decision and would oscillate.
+  atSiteEnd = flow.atEnd;
 
-  deckHost.classList.toggle("atend", atSiteEnd);
+  flowHost.classList.toggle("atend", atSiteEnd);
   composer.compact(!atSiteEnd && !aim);
   if (!aim) {
     composer.placeholder(atSiteEnd
       ? "Ask a follow-up, or something new…"
-      : "Ask about this page, or something new…");
+      : "Ask about what you are reading, or something new…");
   }
 }
 
@@ -309,7 +307,7 @@ let aim: Anchor | undefined;
 let aimChosen = false;
 
 function clearAim() {
-  for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
+  for (const n of flowHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
   aimWatch?.disconnect();
   aimWatch = undefined;
   aim = undefined;
@@ -360,7 +358,7 @@ function reaim() {
  *
  * So the aim follows the reader: still theirs while the block is off screen,
  * but shown as a reminder they can click to go back to, and dropped entirely
- * if they leave the page it lives on.
+ * if they scroll out of the section it lives in.
  */
 let aimWatch: IntersectionObserver | undefined;
 
@@ -369,7 +367,8 @@ function watchAim(node: Element) {
   aimWatch = new IntersectionObserver(
     ([entry]) => { if (entry) paintAim(!entry.isIntersecting); },
     // A block half in view is still in view: the reader can see it and check it.
-    { root: node.closest(".sheet"), threshold: 0.15 },
+    // The flow is the scroller now, so it is also the frame "on screen" means.
+    { root: flowHost, threshold: 0.15 },
   );
   aimWatch.observe(node);
 }
@@ -394,7 +393,7 @@ function paintAim(offScreen = false) {
 }
 
 function setAim(a: Anchor | undefined, chosen = false) {
-  for (const n of deckHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
+  for (const n of flowHost.querySelectorAll(".anchored")) n.classList.remove("anchored");
   aimWatch?.disconnect();
   aimWatch = undefined;
   aim = a;
@@ -409,28 +408,38 @@ function setAim(a: Anchor | undefined, chosen = false) {
  * What the reader is looking at: the block nearest the middle of the view.
  * This is the referent that makes "that number is wrong" mean something.
  *
- * At the END of a page there is no single block being looked at — the whole
- * page is — so a docked composer anchors to the page and nothing narrower.
+ * Every section is searched rather than just the active one. In a deck only
+ * one page could be on screen, so "the active page" and "what is in front of
+ * them" were the same thing; in a flow a section boundary can sit anywhere,
+ * and the block at the middle of the view is the honest answer wherever it
+ * lives.
+ *
+ * At the END of the site there is no single block being looked at — the last
+ * section as a whole is — so the question anchors to it and nothing narrower.
  */
 function currentAnchor(): Anchor | undefined {
-  const id = deck.activeId;
+  const id = flow.activeId;
   if (!id) return undefined;
-  const doc = docFor(id);
-  // At the end of the site there is no single block being looked at — the
-  // whole page is — so the question anchors to the page and nothing narrower.
-  if (!doc || atSiteEnd) return { page: id };
-  const mid = deckHost.getBoundingClientRect().top + deckHost.clientHeight / 2;
+  if (atSiteEnd) return { page: id };
+
+  const mid = flowHost.getBoundingClientRect().top + flowHost.clientHeight / 2;
+  let bestPage: string | undefined;
   let best = -1, bestGap = Infinity;
-  for (const [i, node] of [...doc.children].entries()) {
-    const r = node.getBoundingClientRect();
-    const gap = Math.abs((r.top + r.bottom) / 2 - mid);
-    if (gap < bestGap) { bestGap = gap; best = i; }
+  for (const panel of flowHost.querySelectorAll<HTMLElement>(".panel")) {
+    const doc = panel.querySelector<HTMLElement>(".doc");
+    const page = panel.dataset.page;
+    if (!doc || !page) continue;
+    for (const [i, node] of [...doc.children].entries()) {
+      const r = node.getBoundingClientRect();
+      const gap = Math.abs((r.top + r.bottom) / 2 - mid);
+      if (gap < bestGap) { bestGap = gap; best = i; bestPage = page; }
+    }
   }
-  if (best === -1) return { page: id };
-  const block = pages.find((p) => p.id === id)?.blocks[best];
-  return { page: id, index: best, ...(block?.id ? { id: block.id } : {}) };
+  if (!bestPage || best === -1) return { page: id };
+  const block = pages.find((p) => p.id === bestPage)?.blocks[best];
+  return { page: bestPage, index: best, ...(block?.id ? { id: block.id } : {}) };
 }
-rail.onPick = (id) => deck.gotoId(id);
+rail.onPick = (id) => flow.gotoId(id);
 
 /**
  * Leaving a session nobody used: take it with you.
@@ -536,7 +545,7 @@ function firstRun(): HTMLElement {
   const p = document.createElement("p");
   p.textContent = "Ask a question and this writes you a page about it — "
     + "a real one, with figures and tables, not a chat reply. Ask again and it "
-    + "writes the next page. One session is one small website.";
+    + "writes the next part, below. One session is one long page you scroll.";
   wrap.append(p);
 
   const row = document.createElement("div");
@@ -566,24 +575,28 @@ const CUT_SHORT: Record<string, string> = {
 };
 
 /**
- * Put a mark at the end of a page that was cut off, with the one action worth
- * offering. Nothing else in the product says a page is incomplete — it simply
- * stops, and stopping looks the same as finishing.
+ * Put a mark at the end of the section that was cut off, with the one action
+ * worth offering. Nothing else in the product says an answer is incomplete —
+ * it simply stops, and stopping looks the same as finishing.
+ *
+ * The LAST section, not the active one: the reader may have scrolled away
+ * while the turn ran, and the unfinished work is where it was being written.
  */
 function markUnfinished(cause: string) {
-  const id = deck.activeId;
+  const id = pages.at(-1)?.id;
   const doc = id ? docFor(id) : null;
   if (!doc || doc.querySelector(".cutshort")) return;
 
   const box = document.createElement("div");
   box.className = "note warn cutshort";
-  box.textContent = `This page stopped early — the agent ${
+  box.textContent = `This answer stopped early — the agent ${
     CUT_SHORT[cause] ?? "was interrupted"}. `;
   const go = document.createElement("button");
   go.type = "button";
   go.className = "pagelink";
   go.textContent = "Finish it";
-  go.addEventListener("click", () => void composer.send("Finish this page — it was cut short."));
+  go.addEventListener("click",
+    () => void composer.send("Finish this section — it was cut short."));
   box.append(go);
   doc.append(box);
 }
@@ -608,7 +621,7 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   libraryView.hidden = true;
   sessionView.hidden = false;
 
-  deck.clear();
+  flow.clear();
   pages = [];
 
   const [index, site] = await Promise.all([
@@ -620,11 +633,21 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   chosen = index.chosen ?? {};
   for (const p of site.pages) addPage(p);
 
-  // Always open on the last page — a session is resumed at its newest answer,
-  // and the reader scrolls back for the rest.
-  if (pages.length) deck.goto(pages.length - 1, { animate: false });
+  // Always open at the foot of the site — a session is resumed at its newest
+  // answer, and the reader scrolls back for the rest. Instantly, not smoothly:
+  // a nine-section glide past work they have not read yet is scenery on the way
+  // to where they asked to be.
+  if (pages.length) {
+    flow.toEnd({ animate: false });
+    // And again once the browser has settled. Fonts and figures land after the
+    // first layout, and each one makes the site taller — so a session opened
+    // "at the end" ended up a screen short of it.
+    requestAnimationFrame(() => {
+      flow.toEnd({ animate: false });
+      placeComposer();
+    });
+  }
   paintRail();
-  refit();
   placeComposer();
   // An empty session has nothing to read, so open the composer rather than
   // making a first-time reader hunt for it.
@@ -639,6 +662,27 @@ async function startSession(): Promise<string> {
   const s = (await (await fetch("/sessions", { method: "POST" })).json()) as SessionIndex;
   await openSession(s.id, { starting: true });
   return s.id;
+}
+
+/**
+ * Keep the foot of the site under the reader while a section is being written.
+ *
+ * A deck page grew inside its own frame, so an arriving block never moved
+ * anything. In one scroll it does: the reader watching a section assemble at
+ * the bottom of the window would have each new paragraph land BELOW the fold
+ * and have to chase it. So if they were at the foot before the block landed,
+ * they are still at the foot after it — and if they had scrolled up to read
+ * something, nothing moves them.
+ *
+ * Instant, never smooth: a glide per block would still be running when the
+ * next one arrived.
+ */
+function stickToEnd(change: () => void) {
+  const wasAtEnd = flow.atEnd;
+  change();
+  if (!wasAtEnd) return;
+  flow.toEnd({ animate: false });
+  placeComposer();
 }
 
 /* ------------------------------------------------------------------- turn */
@@ -682,7 +726,7 @@ function handle(ev: WireEvent) {
       const page = pages.find((p) => p.id === ev.page);
       if (!doc || !page) break;
       page.blocks[ev.index] = ev.block;
-      appendBlock(doc, ev.block, actionsFor(ev.page));
+      stickToEnd(() => appendBlock(doc, ev.block, actionsFor(ev.page)));
       break;
     }
 
@@ -704,9 +748,10 @@ function handle(ev: WireEvent) {
     // scroll position, and every node that did not change keeps its identity —
     // its animations, its anchored mark, and the focus inside it.
     //
-    // None of them refit. Fitting is settled once the turn is, exactly as it
-    // is for an append or a whole-page replace — a page that reflowed into two
-    // columns halfway through being amended would be worse than one that waits.
+    // Surgical matters more in a flow than it did in a deck: everything BELOW
+    // the amended section is part of the same scroll, so rebuilding a section
+    // the reader has scrolled past would move the ground under what they are
+    // reading now.
     case "page_block_insert": {
       const doc = docFor(ev.page);
       const page = pages.find((p) => p.id === ev.page);
@@ -749,8 +794,8 @@ function handle(ev: WireEvent) {
       if (i === -1 || !doc) break;
       pages[i] = ev.page;
       doc.className = `doc lay-${ev.page.layout ?? "column"}`;
-      // Rebuilt in place, so the panel keeps its identity and the reader keeps
-      // their position in the deck.
+      // Rebuilt in place, so the section keeps its identity and the reader
+      // keeps their position in the scroll.
       doc.replaceChildren();
       const acts = actionsFor(ev.page.id);
       for (const b of ev.page.blocks) appendBlock(doc, b, acts);
@@ -770,7 +815,7 @@ function handle(ev: WireEvent) {
     }
 
     case "page_remove":
-      deck.remove(ev.page);
+      flow.remove(ev.page);
       pages = pages.filter((p) => p.id !== ev.page);
       paintRail();
       break;
@@ -787,7 +832,6 @@ function handle(ev: WireEvent) {
       answered = ev.answered;
       chosen = ev.chosen ?? {};
       repaintControls();
-      refit();
       break;
 
     case "turn_end": {
@@ -925,7 +969,7 @@ function pointedAt(e: MouseEvent): { node: HTMLElement; doc: HTMLElement; quote:
 
 // `mouseup` rather than `click`: a click's target is a compromise between two
 // points, and the selection is only settled once the button comes up.
-deckHost.addEventListener("mouseup", (e) => {
+flowHost.addEventListener("mouseup", (e) => {
   if (composer.busy || !sessionId) return;
   const target = e.target as HTMLElement;
   if (target.closest("button")) return;             // links and figures keep their own clicks
@@ -1008,15 +1052,16 @@ composer.onSubmit = async (q) => {
 mountSettings(
   $("prefsbtn"), $("prefs"),
   (open) => railHost.classList.toggle("open", open),
-  // Text size, measure and the columns dial all change what fits.
-  () => { refit(); placeComposer(); },
+  // Text size and measure change how tall the site is, which changes whether
+  // the reader is at the end of it.
+  () => placeComposer(),
 );
 
 // A resize changes the frame the page has to fit inside.
 let resizing: number | undefined;
 window.addEventListener("resize", () => {
   clearTimeout(resizing);
-  resizing = setTimeout(() => { refit(); placeComposer(); }, 150) as unknown as number;
+  resizing = setTimeout(() => placeComposer(), 150) as unknown as number;
 });
 
 // A closed tab sends nothing, so `keepalive` is what makes this land. The
