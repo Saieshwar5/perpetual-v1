@@ -181,9 +181,14 @@ export function turnMessage(
       opts.pastAsks.slice(-8).map((a) => `  - ${a}`).join("\n")}`);
   }
 
-  // The anchor is a strong hint, not an instruction. It tells the agent what
-  // "that" refers to; the routing guidance in rules.md still decides whether
-  // the answer amends this page or starts a new one.
+  // The anchor now decides placement as well as reference.
+  //
+  // It used to be a hint about what "that" meant, and rules.md judged from the
+  // prose whether the answer amended that page or started a new one. That
+  // judgement was the least reliable thing in the system and it was invisible
+  // until it was wrong. The site is one scroll now, so there is nothing to
+  // judge: a pointed-at section is where the answer goes, and everything else
+  // goes at the end.
   if (opts.anchor) {
     const page = opts.site.pages.find((p) => p.id === opts.anchor!.page);
     if (page) {
@@ -204,7 +209,9 @@ export function turnMessage(
         (opts.anchor.quote
           ? `.\nThey have highlighted, inside it:\n\n> ${opts.anchor.quote}\n\nTreat that as what "this" refers to`
           : "") +
-        ". If they are correcting or refining that page, rewrite it in place." +
+        ". They are pointing at it, so that is the section the answer belongs " +
+        "in: change it in place with `page` rather than writing a new one. If " +
+        "they are correcting or refining it, rewrite it in place." +
         (at?.id
           ? ` That block is named \`${at.id}\` — if the fix is confined to it, rewrite ` +
             "only its line and the reader's page updates around it without being rebuilt."

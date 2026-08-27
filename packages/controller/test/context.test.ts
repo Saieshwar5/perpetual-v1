@@ -36,8 +36,9 @@ test("an anchored ask names the page and the block being looked at", () => {
   });
   assert.match(m, /asking from \*\*003-margin-analysis\*\* \("Margin analysis"\)/);
   assert.match(m, /a metrics block reading "\$4\.2M ARR", "18% growth"/);
-  // A hint, not an instruction: rules.md still decides amend versus new page.
-  assert.match(m, /If they are correcting or refining that page, rewrite it in place/);
+  // Not a hint any more: pointing at a section is what places the answer in it.
+  assert.match(m, /that is the section the answer belongs in/);
+  assert.match(m, /rather than writing a new one/);
 });
 
 test("each block kind describes itself usefully", () => {

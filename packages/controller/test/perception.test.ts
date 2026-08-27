@@ -70,12 +70,10 @@ test("sideways scrolling names the block, and both numbers", () => {
   assert.match(note, /cannot see the end of/);
 });
 
-test("a page given two columns is reported as fine, but reported", () => {
+test("a section that fits a screen is not worth a word", () => {
   const q = new NoteQueue();
-  q.add(report({ fit: "columns", screens: 1.7 }), new Set(["003-margins"]));
-  const note = q.drain()!;
-  assert.match(note, /Nothing to fix/);
-  assert.match(note, /may push it into scrolling/, "the useful half: what it is close to");
+  q.add(report({ fit: "single", screens: 0.9 }), new Set(["003-margins"]));
+  assert.equal(q.drain(), null, "nothing to act on is nothing to say");
 });
 
 /* ------------------------------------------------------------ engagement */

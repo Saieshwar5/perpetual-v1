@@ -13,20 +13,14 @@
 export type Theme = "system" | "light" | "dark";
 export type TypeScale = "small" | "normal" | "large" | "larger";
 export type Measure = "normal" | "wide";
-/**
- * Provisional. Columns should simply be right, and a dial for them is an
- * admission that they might not be — it exists so the same page can be judged
- * both ways, and should come out once it has been.
- */
-export type Columns = "auto" | "off";
 
 export interface Settings {
-  theme: Theme; type: TypeScale; measure: Measure; columns: Columns;
+  theme: Theme; type: TypeScale; measure: Measure;
 }
 
 const KEY = "perpetual.settings";
 const DEFAULTS: Settings = {
-  theme: "system", type: "normal", measure: "normal", columns: "auto",
+  theme: "system", type: "normal", measure: "normal",
 };
 
 const TYPE_SCALE: Record<TypeScale, string> = {
@@ -94,8 +88,8 @@ export function mountSettings(
     apply(current);
     save(current);
     paint();
-    // Type size and measure change how much fits, so the layout decision has
-    // to be made again.
+    // Type size and measure change how tall the site is, so where its end is
+    // has to be worked out again.
     onChange(current);
   });
 

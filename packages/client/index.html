@@ -46,13 +46,14 @@
     <dt>⌘K</dt><dd>ask something</dd>
     <dt>/</dt><dd>ask something</dd>
     <dt>Esc</dt><dd>stop pointing at a block, then close</dd>
-    <dt>PageUp / PageDown</dt><dd>move between pages</dd>
+    <dt>PageUp / PageDown</dt><dd>move between sections</dd>
     <dt>?</dt><dd>this list</dd>
   </dl>
   <button class="railbtn" id="keysclose" type="button">Close</button>
 </div>
 
-<!-- ALTITUDE 2 — a session. Fixed chrome; the deck in the middle is the agent's. -->
+<!-- ALTITUDE 2 — a session. Fixed chrome; the flow in the middle is the
+     agent's: one continuous scroll, made of the sections it writes. -->
 <section class="view sess" id="session" hidden>
   <!-- No horizontal bar. On a laptop the scarce dimension is height and the
        abundant one is width, so the chrome lives in the rail — which was
@@ -89,7 +90,7 @@
     </div>
   </aside>
 
-  <main class="deck" id="deck"></main>
+  <main class="site" id="site"></main>
 
   <!-- Reader settings. Chrome, never the canvas: the agent cannot see or
        reach any of this. Anchored beside the rail's foot, where its button is. -->
@@ -120,17 +121,10 @@
         <button type="button" data-v="wide">Wide</button>
       </div>
     </div>
-    <div class="prow">
-      <span>Columns</span>
-      <div class="seg" data-key="columns">
-        <button type="button" data-v="auto">Auto</button>
-        <button type="button" data-v="off">Single</button>
-      </div>
-    </div>
   </div>
 
-  <!-- The composer floats here when the reader is mid-page, and moves into
-       the current page's .dock when they reach its end. One element. -->
+  <!-- The composer's one home. It is short while there is still site to read
+       and grows at the foot of it — a size, not a second element. -->
   <div class="floathost" id="floathost"></div>
 
 </section>

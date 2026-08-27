@@ -1,7 +1,7 @@
 (() => {
   const out = [];
   const doc = document.querySelector(".panel.is-current .doc");
-  const deck = document.getElementById("deck");
+  const deck = document.getElementById("site");
   const body = [...doc.children].filter(n => n.tagName === "P" && n.previousElementSibling?.tagName !== "H1");
   const ps = getComputedStyle(body[0]);
 

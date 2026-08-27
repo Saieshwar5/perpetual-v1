@@ -257,8 +257,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
    it takes a click, and what it covers is dimmed so the overlap reads as
    deliberate instead of broken. */
 .rail.open { width: var(--rail-open); box-shadow: 14px 0 40px -24px rgba(0,0,0,.45); }
-.rail.open ~ .deck::after {
-  content: ""; position: absolute; inset: 0; z-index: 20;
+/* Fixed rather than absolute: `.site` is the scroller now, so an absolute
+   overlay inside it would scroll away with the content it is dimming. */
+.rail.open ~ .site::after {
+  content: ""; position: fixed; inset: 0 0 0 var(--rail); z-index: 20;
   background: var(--bg); opacity: .55;
   animation: dimin .18s var(--ease);
 }
@@ -288,87 +290,55 @@ button { font: inherit; color: inherit; cursor: pointer; }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 
-/* ------------------------------------------------------- deck and panels */
+/* ---------------------------------------------------- the flow and its sections */
 
-/* Full viewport height: there is no bar above it any more. */
-.deck {
+/* ONE SCROLLER. Every page used to be a frame of its own — `position:absolute;
+   inset:0`, moved by transform, with an internal `.sheet` that scrolled — and
+   the reader crossed between them with a force-scroll. That frame is what made
+   placement a decision: an answer had to be put in a room, and only the agent
+   could choose which. Sections now stack in normal flow, in the order they
+   were written, and the browser does the rest. */
+.site {
   position: absolute; inset: 0 0 0 var(--rail);
-  overflow: hidden;
-}
-.panel {
-  position: absolute; inset: 0;
-  transition: transform .26s var(--ease);
-  will-change: transform;
-}
-.deck.no-anim .panel { transition: none; }
-
-/* ------------------------------------------------------------- columns */
-
-/* Two columns, only ever when the whole page fits — see fit.ts. The width was
-   always there: at 1440px, two columns at the natural reading measure plus a
-   gutter come to about 1290px, so this is using the page at the size the type
-   was designed for rather than cramming it into strips. */
-.doc.cols-2 {
-  /* A scrolling page wants air before it starts; a page that fits is a fixed
-     frame, like a printed one, and should use it. */
-  padding-top: 2.4vh;
-  /* And no air at the foot either: the dock below carries its own, and in a
-     fixed frame every reclaimed pixel is a pixel of page that fits. */
-  padding-bottom: .4rem;
-  /* Columns divide the page between them, each landing near a comfortable
-     line length on its own. */
-  column-count: 2;
-  column-gap: 3.2rem;
-  column-rule: 1px solid var(--line);
-  max-width: none;
-}
-
-/* The claim belongs to the whole page, not to the left half. */
-.doc.cols-2 > h1 { column-span: all; }
-
-/* A metrics row or a table sliced down the middle is worse than any amount of
-   scrolling, so nothing that is a THING may be cut — only prose may flow. */
-.doc.cols-2 > * { break-inside: avoid; }
-.doc.cols-2 > p { break-inside: auto; orphans: 2; widows: 2; }
-.doc.cols-2 > h2 { break-after: avoid; }
-
-/* A page that fits has nothing to scroll. */
-.sheet.fits { overflow-y: hidden; }
-
-/* Room for the composer, and only where it is actually full size.
-   Every page used to end with a `.dock` reserving 26vh — a quarter of the
-   screen, on every page, for one composer that can only be in one of them. The
-   hairline needs almost nothing; the last page needs enough that a full-size
-   composer never covers the final blocks. Constant regardless of the
-   composer's current size, so growing it cannot change what "at the bottom"
-   means and start an oscillation. */
-.doc { padding-bottom: 4.5rem; }
-.deck .panel:last-child .doc { padding-bottom: 9rem; }
-
-/* The internal scroller. `overscroll-behavior: contain` stops a boundary
-   scroll leaking to the document and bouncing the whole app. */
-/* `both-edges` is the whole reason the text and the composer used to disagree.
-   The scroller's scrollbar eats width from the RIGHT only, so anything centred
-   inside .sheet sat half a scrollbar left of centre — while the composer, which
-   lives outside the scroller in .floathost, stayed centred on the full deck.
-   Reserving the gutter on BOTH edges keeps the content box concentric with the
-   scroller, so the two centres coincide whether or not the page scrolls. */
-.sheet {
-  height: 100%; overflow-y: auto; overscroll-behavior: contain;
+  overflow-y: auto; overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  /* Reserving the gutter on BOTH edges keeps the content box concentric with
+     the scroller, so a centred `.doc` and the composer — which lives outside
+     the scroller, in `.floathost` — agree on where the middle is. Without it
+     the text sat half a scrollbar to the left of the input below it. */
   scrollbar-width: thin; scrollbar-gutter: stable both-edges;
 }
+
+/* A section: a plain block. No transform, no frame, no scroller of its own. */
+.panel { position: relative; }
+
+/* The seam between two sections. A hairline at the reading width rather than
+   edge to edge, so it reads as a break in a document rather than a border
+   round a card — the sections are one site, not a stack of tiles. */
+.panel + .panel .doc { border-top: 1px solid var(--line); }
+
+/* Room for the composer at the foot of the site, and only there. Every page
+   used to end with a `.dock` reserving 26vh — a quarter of the screen, on
+   every page, for one composer that can only be in one place. Constant
+   regardless of the composer's current size, so growing it cannot change what
+   "at the bottom" means and start an oscillation. */
+.site .panel:last-child .doc { padding-bottom: 9rem; }
+
 /* `.doc` sets the base size and everything inside it is `em`, so one dial
    moves the whole document and nothing outside it. */
 /* TEXT keeps the measure; everything else fills the page.
-   Half the deck was empty — 653px of page against 741px of nothing — and the
+   Half the width was empty — 653px of page against 741px of nothing — and the
    cause was capping figures, charts and tables at a READING width they have no
    use for. A figure has no measure. That one asymmetry is most of what makes a
    page look composed rather than dumped, and it costs prose nothing. */
 .doc {
   max-width: var(--page);
-  margin: 0 auto; padding: 7vh var(--gutter) 2rem;
+  margin: 0 auto; padding: 3.4rem var(--gutter);
   font-size: calc(1rem * var(--type));
 }
+/* The top of the site gets the air a first page had; the sections after it are
+   separated by the seam above instead. */
+.panel:first-child .doc { padding-top: 7vh; }
 
 /* Nothing is capped and nothing is centred inside the page any more: every
    block simply fills the column, so a paragraph and the table under it start
@@ -379,28 +349,37 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* --------------------------------------------------------------- blocks */
 
+/* A SIGNPOST, not a cover.
+   2.3em was the right size when a page was a room you landed on: the claim sat
+   alone on an otherwise empty screen and had to carry the whole of it. In one
+   scroll it is something you pass on the way down, with a seam above it already
+   announcing that a new section has started — one job being done by three
+   mechanisms, at title-page size, in a stream. */
 .doc h1 {
-  font-family: var(--serif); font-weight: 500; font-size: 2.3em;
-  line-height: 1.18; letter-spacing: -.02em; text-wrap: balance;
-  margin-top: 0; margin-bottom: 1.1rem;
+  font-family: var(--serif); font-weight: 500; font-size: 1.7em;
+  line-height: 1.22; letter-spacing: -.02em; text-wrap: balance;
+  margin-top: 0; margin-bottom: 1rem;
 }
 
-/* A section break, not a second headline. Much more space above than below,
-   so it binds to the text it introduces rather than floating between two
-   paragraphs — and a hairline, so a long page reads as movements. */
+/* A section break, not a second headline. Much more space above than below, so
+   it binds to the text it introduces rather than floating between two
+   paragraphs.
+
+   The hairline it used to carry is gone. Sections are now separated by a seam
+   of their own, and a rule here as well put two dividers in a row arguing about
+   which break mattered — space says it, and says it more quietly. */
 .doc h2 {
-  font-family: var(--serif); font-weight: 500; font-size: 1.32em;
-  line-height: 1.3; letter-spacing: -.01em; text-wrap: balance;
-  margin-top: 2.8rem; margin-bottom: .9rem;
-  padding-top: 1.5rem; border-top: 1px solid var(--line);
+  font-family: var(--serif); font-weight: 500; font-size: 1.22em;
+  line-height: 1.35; letter-spacing: -.01em; text-wrap: balance;
+  margin-top: 2.4rem; margin-bottom: .8rem;
 }
-.doc h1 + h2 { margin-top: 1.4rem; padding-top: 0; border-top: 0; }
+.doc h1 + h2 { margin-top: 1.4rem; }
 
 /* The lead. The first paragraph after the claim carries the summary — the
    agent already writes it that way without being asked, so the renderer can
    set it without adding anything to the vocabulary. */
 .doc h1 + p {
-  font-size: 1.19em; line-height: 1.62; color: var(--ink-2);
+  font-size: 1.11em; line-height: 1.62; color: var(--ink-2);
   text-wrap: pretty; margin-bottom: 1.5rem;
 }
 .doc p {
@@ -517,8 +496,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 @media (max-width: 620px) {
   :root { --gutter: 20px; }
   .split { grid-template-columns: 1fr; }
-  .doc { padding-top: 5vh; }
-  .doc h1 { font-size: 1.95em; }
+  .panel:first-child .doc { padding-top: 5vh; }
+  .doc h1 { font-size: 1.5em; }
 }
 
 /* ----------------------------------------------------------- composer */
@@ -597,7 +576,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
    as the document ending: a hairline above it, no shadow, no card. That
    quality used to come free from being re-parented into the page; keeping it
    now is deliberate. */
-.deck.atend ~ .floathost .pill[data-size="full"] {
+.site.atend ~ .floathost .pill[data-size="full"] {
   background: none; border: 0; border-top: 1px solid var(--line);
   border-radius: 0; box-shadow: none; padding: 14px 0 0;
 }
@@ -665,7 +644,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   min-height: 1.05em; padding: 0 12px 4px; font-size: .74rem; color: var(--ink-3);
   text-align: center;
 }
-.deck.atend ~ .floathost .pstatus { text-align: left; padding-left: 0; }
+.site.atend ~ .floathost .pstatus { text-align: left; padding-left: 0; }
 .pill .pstatus.work { color: var(--accent); }
 .pill .pstatus.bad { color: var(--warn); }
 .pill .retry {
@@ -680,6 +659,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  /* A smooth scroll is motion too: a reader who asked for less of it should get
+     the jump, not a glide the length of the site. */
+  .site { scroll-behavior: auto; }
 }
 
 /* -------------------------------------------------------------- figures */
@@ -700,19 +682,23 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .doc.lay-column { }                                    /* the default page */
 
-/* These used to differ by how far components BROKE OUT of the reading measure.
-   There is no measure to break out of now, so a wider page is simply a wider
-   page: text and figures widen together instead of one leaving the other
-   behind. The composer keeps the default column on these — it lives outside
-   the page and cannot see which layout the page chose — so on a wide page it
-   is narrower than the text rather than misaligned with it. */
-.doc.lay-wide { --page: calc(64rem * var(--type)); }
+/* ONE WIDTH FOR THE WHOLE SITE. The layout modes used to set their own page
+   caps — 64rem for wide, 72rem for split, 66rem for gallery, against a 54rem
+   default — and in a deck that was invisible: one page filled the screen at a
+   time, so no two widths were ever seen together. In one scroll they are
+   adjacent, and a 72rem section directly above a 54rem one reads as a bug. It
+   is the same complaint that made columns a decision about the SITE rather
+   than about a page, arriving on the width axis.
 
-/* The one layout that is still an arrangement rather than a width: prose down
-   the left, figures down the right. The tracks are fractions now, not a fixed
-   reading measure, so the prose track scales with the page like everything
-   else. Below the breakpoint it stacks and the fractions never apply. */
-.doc.lay-split { --page: calc(72rem * var(--type)); }
+   So a mode now changes the ARRANGEMENT inside the section and never its
+   width. `wide` keeps its name for the agent's sake — it asks for more room and
+   is given the same room as everything else, which is the honest answer in a
+   site with one measure. There is deliberately no `.doc.lay-wide` rule left:
+   the mode is accepted, validated and then styled like everything else. */
+
+/* Prose down the left, figures down the right. The tracks are fractions, so
+   they divide whatever width the site has. Below the breakpoint it stacks and
+   the fractions never apply. */
 @media (min-width: 1100px) {
   .doc.lay-split {
     display: grid;
@@ -726,9 +712,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .doc.lay-split > .tablewrap { grid-column: 2; }
 }
 
-/* Figures at full width, prose between them as connective tissue. Wider than
-   the default page because the figures are the point of this one. */
-.doc.lay-gallery { --page: calc(66rem * var(--type)); }
+/* Figures at full width, prose between them as connective tissue. Bigger
+   figures, not a bigger page. */
 .doc.lay-gallery > .figure { margin-bottom: 2.4rem; }
 .doc.lay-gallery > .figure .svgwrap { padding: 28px; }
 
@@ -786,7 +771,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
   opacity: 0; transition: opacity .14s var(--ease);
   pointer-events: none;
 }
-.doc.cols-2 > *::before { left: -11px; }
 
 /* Everything in a page is pointable while the composer is open, so it should
    look it — but only then, and only just. */
@@ -817,7 +801,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .pill .aimoff:hover { opacity: 1; background: var(--surface-2); }
 .pill .aim:not(.cancellable) .aimoff { display: none; }
-.deck.atend ~ .floathost .aim { padding-left: 0; }
+.site.atend ~ .floathost .aim { padding-left: 0; }
 .pill[data-state="idle"] .aim { display: none; }
 .pill[data-state="busy"] .aim { color: var(--ink-2); font-style: italic; }
 
@@ -875,7 +859,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
   gap: 2px; margin-top: 2.2rem; margin-bottom: 0; padding-top: 1.4rem;
   border-top: 1px solid var(--line);
 }
-.doc.cols-2 > .next { column-span: all; }
 
 .doc .nextq {
   display: flex; align-items: baseline; gap: 10px; text-align: left; width: 100%;

@@ -1,8 +1,17 @@
 # How to build the site
 
-One session is **one website**. Its pages are connected: the reader scrolls
-between them in order, and a rail lists them all. You never build navigation —
-writing a page into the tree is what connects it.
+One session is **one website**, and the reader sees it as ONE CONTINUOUS
+SCROLL. Everything you write stacks into that scroll in the order you wrote it,
+separated by a hairline. There are no separate screens to move between and
+nothing for the reader to open.
+
+Each directory under `ui/pages/` is one **section** of that scroll. Everything
+below still calls them pages, because that is what the directories, the
+commands and the `page` program call them — but a "page" is a section of one
+long document, not a room of its own.
+
+You never build navigation. Writing a section into the tree is what puts it on
+screen, and a rail lists them all so the reader can jump.
 
 ## The directory
 
@@ -87,6 +96,7 @@ atomically, and tells you what is there when you name something that is not.
 
 ```
 page ls     <page>                             what is on it, with names
+page append <page> '<json>'                    add at the end, above any doors
 page set    <page> <id> '<json>'               replace that block, in place
 page after  <page> <id> '<json>'               insert after that block
 page before <page> <id> '<json>'               insert before that block
@@ -96,10 +106,16 @@ page split  <page> --from <id> --into <new-page-id> '<title>'
 ```
 
 ```bash
+page append 003-margins '{"kind":"prose","id":"caveat","text":"Q2 is provisional."}'
 page set 003-margins numbers '{"kind":"metrics","items":[{"value":"39%","label":"Gross margin"}]}'
 page after 003-margins how '{"kind":"note","id":"caveat","text":"Q2 is provisional.","tone":"warn"}'
 page split 003-margins --from by-quarter --into 004-volume 'How volume moves the margin'
 ```
+
+**Use `append`, not `cat >>`, to add to a section that already exists.** A
+section may end with a `next` block, and that block has to stay last — `cat >>`
+would put your new block underneath the doors and the section would be
+rejected. `append` knows the rule and slips the block in above them.
 
 The JSON goes in **single quotes**. If the text contains an apostrophe, pass
 `-` and give the block on stdin instead:
@@ -121,7 +137,8 @@ that matches nothing succeeds and changes nothing — you would be told it
 worked. `page` fails loudly instead.
 
 Writing a NEW page is unchanged: `mkdir`, write `meta.json`, and
-`cat >> page.ndjson` one block at a time.
+`cat >> page.ndjson` one block at a time. `cat >>` is for the section you are
+writing now; `page append` is for one you wrote earlier.
 
 ## The blocks
 
@@ -137,7 +154,7 @@ them readable.
 | `list` | `{"kind":"list","items":["…","…"]}` — 2+ short items |
 | `code` | `{"kind":"code","text":"npm run build","lang":"bash"}` |
 | `note` | `{"kind":"note","text":"…","tone":"warn"}` — tone is `info` or `warn` |
-| `link` | `{"kind":"link","page":"002-costs","text":"Cost breakdown"}` |
+| `link` | `{"kind":"link","page":"002-costs","text":"Cost breakdown"}` — rarely needed now, see below |
 | `metrics` | `{"kind":"metrics","items":[{"value":"$4.2M","label":"ARR","emphasis":true},{"value":"18%","label":"Growth"}]}` — 2 to 4, values are strings |
 | `chart` | `{"kind":"chart","values":[3,7,12,9],"labels":["Q1","Q2","Q3","Q4"],"highlight":[2],"caption":"…"}` — 3+ numbers |
 | `table` | `{"kind":"table","headers":["A","B"],"rows":[["1","2"]]}` — every cell a string |
@@ -181,7 +198,7 @@ downloads one" refers to, because the answer cannot be ambiguous.
 | whose question | yours | the page's |
 | why | you cannot proceed without an answer | the reader might want to go further |
 | where | at the point the question came up | last block on the page |
-| what an answer does | continues the work in place | forks: writes a new page |
+| what an answer does | continues the work in place | forks: writes a new section at the end |
 
 ## Structure
 
@@ -324,18 +341,41 @@ found, and moving it afterwards costs you a command you did not need to spend.
 - Short paragraphs. One idea each. 2–5 sentences.
 - No filler: no "in conclusion", no "it's important to note", no restating the
   question back at the reader.
-- 4 to 10 blocks is the usual range. Above 24 the page is rejected — split it
-  into a second page and `link` to it.
+- **Write what the answer needs, then stop.** Two blocks is a real answer and
+  so is twelve. There is no page to fill: a short reply sits in the scroll as a
+  short reply, and padding it out to page length is the one thing that makes it
+  look wrong. Above 24 blocks a section is rejected — split it.
 
 ## When the user follows up
 
-Look at what they mean:
+There are **two moves**, and you are told which one applies. You are not
+deciding where an answer "belongs".
 
-- **A correction or refinement of the last page** ("shorter", "you got the
-  second number wrong", "add the cost") — rewrite that page in place. Do not
-  make a new one.
-- **A new question** — new page, next number. Add a `link` block if it
-  genuinely follows from an earlier page.
+**They are pointing at something.** The turn message says so — "The user is
+asking from **003-margins**", and the words they highlighted if they
+highlighted any. That section is where the answer goes. Change it in place with
+`page`: `set` the block they are looking at, or `after` it to add what they
+asked for. Do not start a new section for it.
 
-When in doubt, write a new page. A page too many costs a scroll; a lost answer
-costs the work.
+This covers most follow-ups, and it covers them however they are worded — a
+definition of a word in the paragraph, "explain this differently", "you got
+that number wrong", "add the cost". They are reading one thing and asking about
+it; the answer belongs beside it, where they are looking.
+
+**They are pointing at nothing.** Write a new section at the end, next number.
+That is the default, and it costs nothing: sections stack, so a new one is
+simply the next thing to scroll to.
+
+A `link` block is rarely worth writing now. It used to carry the reader to a
+page they could not otherwise reach; everything is in one scroll, so a link to
+the section just above points at something already on screen. Use one only to
+reach back to a section far up the site that this answer genuinely depends on.
+
+Two notes:
+
+- **A correction of what you just wrote is an in-place change even with no
+  pointer.** "Shorter", "that is wrong", "try again" is about the section you
+  have just written — rewrite that one.
+- **Never renumber, and never rewrite a section the user has not asked about.**
+  Everything below an amended section is part of the same scroll, so changing
+  an old one moves the ground under whatever they are reading now.
