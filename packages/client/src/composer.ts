@@ -38,7 +38,6 @@ export class Composer {
 
   private aimEl: HTMLElement;
   private aimText: HTMLElement;
-  private posEl: HTMLElement;
   private verbEl: HTMLElement;
   private rawBtn: HTMLButtonElement;
   private rawEl: HTMLElement;
@@ -76,7 +75,6 @@ export class Composer {
     this.input = root.querySelector("input")!;
     this.aimEl = root.querySelector(".aim")!;
     this.aimText = root.querySelector(".aimtext")!;
-    this.posEl = root.querySelector(".pos")!;
     this.verbEl = root.querySelector(".verb")!;
     this.rawBtn = root.querySelector(".rawbtn")!;
     this.rawEl = root.querySelector(".raw")!;
@@ -167,28 +165,7 @@ export class Composer {
     this.aimEl.classList.toggle("faded", Boolean(opts.faded));
   }
 
-  /**
-   * Which host the pill returns to when it is not docked. The library and the
-   * session are different views, so the composer is re-homed as you move
-   * between them rather than duplicated — one element, one set of shortcuts,
-   * one behaviour to learn.
-   */
-  setHome(host: HTMLElement) {
-    this.floatHost = host;
-    if (this.root.parentElement !== host) host.append(this.root);
-  }
-
   placeholder(text: string) { this.input.placeholder = text; }
-
-  /**
-   * Where the reader is in the site.
-   *
-   * The hairline would otherwise be chrome asking to be noticed while saying
-   * nothing. This is the same count that used to sit in the rail's foot at
-   * 46px wide, where it was effectively invisible — one element doing two
-   * jobs, which is how the rest of this is built.
-   */
-  position(text: string) { this.posEl.textContent = text; }
 
   clear() { this.input.value = ""; this.onType(""); }
 

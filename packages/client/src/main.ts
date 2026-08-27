@@ -3,9 +3,8 @@
  *
  * Two zones, and the boundary between them is the architecture:
  *
- *   FIXED CHROME — the library, the header, the rail, the composer. Hand-built,
- *   identical in every session, never generated. The agent does not know it
- *   exists.
+ *   FIXED CHROME — the sidebar and the composer. Hand-built, identical in every
+ *   session, never generated. The agent does not know it exists.
  *
  *   THE CANVAS — the flow in the middle: one continuous scroll made of
  *   sections, rendered from files in the session directory and from nothing
@@ -18,12 +17,13 @@
  * A note on the word "page". On disk and on the wire a section is still a
  * page — `ui/pages/NNN-slug`, `page_open`, `page_block` — because that is what
  * the agent writes and what the watcher reports. What changed is only how they
- * are PRESENTED: stacked into one scroll instead of dealt out as a deck.
+ * are PRESENTED: stacked into one scroll instead of dealt out as a deck, with
+ * the question that produced each one standing above it.
  */
 import { appendBlock, renderBlock, type BlockActions } from "./render.ts";
 import { runTurn, type WireEvent } from "./stream.ts";
 import { Flow } from "./flow.ts";
-import { Rail } from "./rail.ts";
+import { Sidebar } from "./side.ts";
 import { Composer } from "./composer.ts";
 import { mountSettings, load as loadSettings } from "./settings.ts";
 import { measureFlow } from "./measure.ts";
@@ -34,20 +34,15 @@ import type { RenderReport } from "@perpetual/shared/render";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const libraryView = $("library");
-const sessionView = $("session");
-const grid = $("grid");
+const appEl = $("app");
 // `.site`, not `.flow`: the `flow` BLOCK (a sequence of steps) already owns
 // that class inside a page, and one of the two would have eaten the other.
 const flowHost = $("site");
-const railHost = $("rail");
-const titleEl = $("stitle");
+const sideHost = $("side");
 
 const flow = new Flow(flowHost);
-const rail = new Rail(railHost, $("railmid"));
+const side = new Sidebar(sideHost, $("sessions"), $<HTMLInputElement>("sidesearch"));
 const composer = new Composer($("pill"), $("floathost"));
-const libHost = $("libhost");
-const matchEl = $("matchline");
 
 let sessionId: string | null = null;
 let pages: Page[] = [];
@@ -55,7 +50,7 @@ let think = "";
 let turn: AbortController | null = null;
 /** Did the reader ask anything in this session while it was open? */
 let attempted = false;
-/** The library, as loaded. Filtering is a view over this, not a refetch. */
+/** Every session, as loaded. The sidebar filters this rather than refetching. */
 let library: SessionIndex[] = [];
 /** What a rendered block may do. Defined once so every render path agrees. */
 /** Doors already walked through: `doorKey(page, question)` -> the page it built. */
@@ -117,11 +112,6 @@ function actionsFor(page: string): BlockActions {
   };
 }
 
-/** The actions for whichever page a node belongs to. */
-const actionsForNode = (doc: Element): BlockActions =>
-  actionsFor(doc.closest<HTMLElement>(".panel")?.dataset.page ?? "");
-let filter = "";
-
 const status = (text: string, tone: "" | "work" | "bad" = "") => composer.status(text, tone);
 
 /* ------------------------------------------------------------------ pages */
@@ -147,13 +137,98 @@ function makePanel(page: Page) {
   return { root, doc };
 }
 
-function addPage(page: Page, opts: { goto?: boolean } = {}) {
-  const { root, doc } = makePanel(page);
+/**
+ * The question that produced a section, standing above it.
+ *
+ * The reader's asks used to live in the rail, listed down the side of the work
+ * they produced. That was a table of contents pretending to be a conversation:
+ * you could see the questions, but never beside the answers they got.
+ *
+ * They belong in the scroll. Each one is the record of what was asked, and it
+ * is also what gives the site its rhythm — ask, answer, ask, answer — which is
+ * why the hairline that used to separate sections is gone: the question is the
+ * separator now, and two separators would be one too many.
+ *
+ * OUTSIDE `.doc`, deliberately. Everything inside a `.doc` is a block the agent
+ * wrote and the reader can point at; this is the reader's own sentence, and
+ * pointing at it would mean asking the agent about a question they just asked.
+ */
+function askBubble(text: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "ask";
+  const said = document.createElement("p");
+  said.textContent = text;
+  el.append(said);
+  return el;
+}
+
+/**
+ * One turn: what was asked, and what got written because of it.
+ *
+ * The section keeps its own element and its own `data-page`, so everything
+ * that addresses a block — `docFor`, the anchor, the keyed ops, the render
+ * report — works exactly as it did. The wrapper only puts a question above it.
+ */
+function makeTurn(page: Page, ask: string | null): { turn: HTMLElement; root: HTMLElement } {
+  const turn = document.createElement("section");
+  turn.className = "turn";
+  if (ask) turn.append(askBubble(ask));
+  const { root } = makePanel(page);
   root.dataset.page = page.id;
-  doc.dataset.blocks = String(page.blocks.length);
-  flow.add({ id: page.id, root });
+  turn.append(root);
+  return { turn, root };
+}
+
+/**
+ * The question the reader just asked, on screen before there is an answer.
+ *
+ * The alternative is a second of nothing: they press enter and the site is
+ * exactly as it was until the agent's first block lands. Held here so the
+ * section can be dropped into it when the turn opens one.
+ */
+let pendingTurn: HTMLElement | null = null;
+
+function openPendingTurn(ask: string) {
+  closePendingTurn();
+  const turn = document.createElement("section");
+  turn.className = "turn pending";
+  turn.append(askBubble(ask));
+  flowHost.append(turn);
+  pendingTurn = turn;
+  flow.toEnd();
+}
+
+/** Nothing came of it, or something did — either way it stops being pending. */
+function closePendingTurn(keep = false) {
+  if (!pendingTurn) return;
+  if (!keep) pendingTurn.remove();
+  else pendingTurn.classList.remove("pending");
+  pendingTurn = null;
+}
+
+function addPage(page: Page, opts: { goto?: boolean } = {}) {
+  // One question, one answer: a second section written in the same turn hangs
+  // under the same question rather than repeating it.
+  const ask = page.ask && page.ask !== pages.at(-1)?.ask ? page.ask : null;
+
+  let turn: HTMLElement;
+  let root: HTMLElement;
+  if (pendingTurn) {
+    // The reader's question is already on screen. The section lands underneath
+    // the one they asked, not under a second copy of it.
+    turn = pendingTurn;
+    ({ root } = makePanel(page));
+    root.dataset.page = page.id;
+    turn.append(root);
+    closePendingTurn(true);
+  } else {
+    ({ turn, root } = makeTurn(page, ask));
+  }
+
+  root.querySelector<HTMLElement>(".doc")!.dataset.blocks = String(page.blocks.length);
+  flow.add({ id: page.id, root: turn });
   pages.push(page);
-  paintRail();
+  paintSide();
   // A section that has just been opened is the one the reader wants to watch
   // being written, and in a flow that is a scroll rather than a page turn.
   if (opts.goto) flow.toEnd();
@@ -289,15 +364,22 @@ function scheduleReport() {
   reportTimer = setTimeout(reportRender, REPORT_SETTLE_MS) as unknown as number;
 }
 
-function paintRail() {
-  rail.set(pages.map((p) => ({ id: p.id, ask: p.ask ?? "", title: p.title })));
-  rail.setActive(flow.index);
-  composer.position(pages.length ? `${flow.index + 1} / ${pages.length}` : "");
+/**
+ * The sidebar's picture of the session being read.
+ *
+ * Labelled by the reader's own question rather than the agent's title for its
+ * answer, for the same reason the rail was: somebody looking for something
+ * remembers what they asked, not the three words the agent chose.
+ */
+function paintSide() {
+  side.setSections(
+    pages.map((p) => ({ id: p.id, label: p.ask || p.title })),
+    flow.activeId,
+  );
 }
 
 flow.onChange = (i, id) => {
-  rail.setActive(i);
-  composer.position(pages.length ? `${i + 1} / ${pages.length}` : "");
+  side.setActiveSection(id);
   // Scrolling out of the section the aim lives in drops it to that section. A
   // block the reader has scrolled past is a reminder they can go back to; one
   // in a section they have LEFT is a claim about something they are no longer
@@ -508,7 +590,6 @@ function currentAnchor(): Anchor | undefined {
   const block = pages.find((p) => p.id === bestPage)?.blocks[best];
   return { page: bestPage, index: best, ...(block?.id ? { id: block.id } : {}) };
 }
-rail.onPick = (id) => flow.gotoId(id);
 
 /**
  * Leaving a session nobody used: take it with you.
@@ -524,92 +605,56 @@ async function retireIfUnused(id: string | null, opts: { unloading?: boolean } =
   if (!opts.unloading) await req.catch(() => {});
 }
 
-/* --------------------------------------------------------------- library */
+/* ------------------------------------------------------------- sessions */
 
-async function showLibrary(opts: { focus?: boolean } = {}) {
-  await retireIfUnused(sessionId);
-  sessionId = null;
-  location.hash = "";
-  libraryView.hidden = false;
-  sessionView.hidden = true;
-
-  // The composer comes with us. On this view it is the primary action, so it
-  // opens rather than waiting to be invoked.
-  composer.setHome(libHost);
-  // Never short here: on the library there is no page to be quiet about, and
-  // asking is the only thing to do.
-  composer.compact(false);
-  composer.placeholder("Ask anything — or type to find an earlier session");
-  composer.clear();
-  if (opts.focus !== false) composer.open();
-  status("");
-
+/** The list in the sidebar, refetched whenever it can have changed. */
+async function loadSessions() {
   library = (await (await fetch("/sessions")).json()) as SessionIndex[];
-  paintLibrary();
-}
-
-/** Does this session answer anything like what is being typed? */
-function matches(s: SessionIndex, q: string): boolean {
-  if (!q) return true;
-  const hay = `${s.title} ${s.asks.join(" ")}`.toLowerCase();
-  return q.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
-}
-
-function paintLibrary() {
-  const shown = library.filter((s) => matches(s, filter));
-
-  // The count is what makes the filter worth having: it answers "have I asked
-  // this before?" before a model call is spent finding out.
-  matchEl.textContent = !filter
-    ? ""
-    : shown.length
-      ? `${shown.length} of ${library.length} session${library.length === 1 ? "" : "s"} match`
-      : "";
-
-  grid.replaceChildren(...shown.map((s) => {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "card";
-    const h = document.createElement("h3");
-    h.textContent = s.title;
-    const last = document.createElement("p");
-    last.className = "last";
-    last.textContent = s.asks.at(-1) ?? "No pages yet";
-    const meta = document.createElement("div");
-    meta.className = "cmeta";
-    meta.textContent = `${s.pageCount} page${s.pageCount === 1 ? "" : "s"} · ${when(s.updatedAt)}`;
-    card.append(h, last, meta);
-    card.addEventListener("click", () => openSession(s.id));
-    return card;
-  }));
-
-  if (!shown.length) {
-    const empty = document.createElement("p");
-    empty.className = "empty";
-    if (filter) {
-      empty.textContent = "No sessions match. Press ↵ to ask it as a new question.";
-      grid.replaceChildren(empty);
-    } else if (library.length) {
-      grid.replaceChildren();
-    } else {
-      // The first screen anyone sees, and it used to be one flat sentence. It
-      // is the only chance to say what this is — so it says it, and offers
-      // three real questions rather than asking the reader to invent one.
-      grid.replaceChildren(firstRun());
-    }
-  }
+  side.set(library);
+  side.setActive(sessionId);
 }
 
 /**
- * What to show someone who has never used this.
+ * A blank site, waiting for a question.
  *
- * An empty grid teaches nothing, and "ask something" is an instruction, not an
- * explanation. The examples are clickable because the fastest way to explain a
- * product that writes a website in answer to a question is to answer one.
+ * There is no library to go back to any more, so this is what "no session
+ * open" looks like: the middle of the screen, the composer, and three real
+ * questions. A session still comes into existence because something was
+ * ASKED — nothing is created by pressing this.
  */
-function firstRun(): HTMLElement {
+async function newSession(opts: { focus?: boolean } = {}) {
+  await retireIfUnused(sessionId);
+  sessionId = null;
+  attempted = false;
+  pages = [];
+  flow.clear();
+  pendingTurn = null;
+  location.hash = "";
+  side.setActive(null);
+  side.setSections([]);
+  flowHost.replaceChildren(emptyState());
+  appEl.dataset.empty = "1";
+  composer.compact(false);
+  composer.placeholder("Ask anything…");
+  composer.clear();
+  status("");
+  if (opts.focus !== false) composer.open();
+}
+
+/**
+ * What to show someone with nothing open.
+ *
+ * "Ask something" is an instruction, not an explanation. The examples are
+ * clickable because the fastest way to explain a product that answers by
+ * writing a website is to have it answer one.
+ */
+function emptyState(): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "firstrun";
+
+  const h = document.createElement("h1");
+  h.textContent = "Ready when you are.";
+  wrap.append(h);
 
   const p = document.createElement("p");
   p.textContent = "Ask a question and this writes you a page about it — "
@@ -670,34 +715,27 @@ function markUnfinished(cause: string) {
   doc.append(box);
 }
 
-function when(iso: string): string {
-  const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
-  return `${Math.round(mins / 1440)}d ago`;
-}
-
 /* --------------------------------------------------------------- session */
 
 async function openSession(id: string, opts: { starting?: boolean } = {}) {
   if (id !== sessionId) await retireIfUnused(sessionId);
   sessionId = id;
   attempted = Boolean(opts.starting);
-  composer.setHome($("floathost"));
   composer.placeholder("Ask anything…");
   location.hash = `#/s/${id}`;
-  libraryView.hidden = true;
-  sessionView.hidden = false;
+  appEl.dataset.empty = "";
 
   flow.clear();
+  flowHost.replaceChildren();          // the empty state, if it was up
   pages = [];
+  if (!opts.starting) pendingTurn = null;
 
   const [index, site] = await Promise.all([
     fetch(`/sessions/${id}`).then((r) => r.json()) as Promise<SessionIndex>,
     fetch(`/sessions/${id}/site`).then((r) => r.json()) as Promise<Site>,
   ]);
-  titleEl.textContent = index.title;
+  side.setActive(id);
+  side.rename(id, index.title);
   answered = index.answered ?? {};
   chosen = index.chosen ?? {};
   for (const p of site.pages) addPage(p);
@@ -717,7 +755,7 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
       placeComposer();
     });
   }
-  paintRail();
+  paintSide();
   placeComposer();
   // An empty session has nothing to read, so open the composer rather than
   // making a first-time reader hunt for it.
@@ -869,7 +907,7 @@ function handle(ev: WireEvent) {
       doc.replaceChildren();
       const acts = actionsFor(ev.page.id);
       for (const b of ev.page.blocks) appendBlock(doc, b, acts);
-      paintRail();
+      paintSide();
       reaim();
       break;
     }
@@ -879,15 +917,17 @@ function handle(ev: WireEvent) {
       if (!p) break;
       p.title = ev.title;
       if (ev.ask) p.ask = ev.ask;
-      if (pages[0] === p) titleEl.textContent = ev.title;
-      paintRail();
+      // The session takes its name from its first section, so naming that one
+      // renames the session — in the sidebar, which is where its name lives now.
+      if (pages[0] === p && sessionId) side.rename(sessionId, ev.title);
+      paintSide();
       break;
     }
 
     case "page_remove":
       flow.remove(ev.page);
       pages = pages.filter((p) => p.id !== ev.page);
-      paintRail();
+      paintSide();
       break;
 
     case "problem":
@@ -1074,7 +1114,9 @@ flowHost.addEventListener("mouseup", (e) => {
   }, true);
 });
 
-composer.onType = (text) => { if (!sessionId) { filter = text; paintLibrary(); } };
+// The composer only ever asks now. It used to do double duty — filtering the
+// library on one view and asking on the other — because there was one composer
+// for two screens. The sidebar has its own search, so this one has one job.
 
 /** The last question asked, so a failed turn can offer to run it again. */
 let lastAsk = "";
@@ -1085,26 +1127,32 @@ composer.onSubmit = async (q) => {
   lastAsk = q;
   lastFailed = "";
 
-  // Asked from the library: the session comes into existence because of the
+  // Asked with nothing open: the session comes into existence because of the
   // question, and we move to it at once so the reader watches it assemble.
-  const fromLibrary = !sessionId;
+  const fresh = !sessionId;
   // Consumed here and nowhere else: a click sets it immediately before
   // sending, so anything typed arrives with it already empty.
   const selection = pendingSelection;
   pendingSelection = undefined;
   // A click already says where it came from; an implicit anchor on top of it
   // would be a second, weaker answer to the same question.
-  const anchor = fromLibrary || selection ? undefined : (aim ?? currentAnchor());
+  const anchor = fresh || selection ? undefined : (aim ?? currentAnchor());
   clearAim();
   think = "";
   composer.working(q);
+  // The question goes on screen before anything answers it. Without this the
+  // site sits exactly as it was until the agent's first block lands, and the
+  // reader has no evidence their question went anywhere.
+  appEl.dataset.empty = "";
+  if (fresh) flowHost.replaceChildren();          // the empty state, if it was up
+  openPendingTurn(q);
   // The activity line already says "Thinking"; the status line is for what the
   // model is actually saying while it does, which arrives as text deltas.
   status("");
   turn = new AbortController();
 
   try {
-    const id = fromLibrary ? await startSession() : sessionId!;
+    const id = fresh ? await startSession() : sessionId!;
     attempted = true;               // this session has been used; it stays
     for await (const ev of runTurn(id, q, anchor, selection, turn.signal)) handle(ev);
   } catch (err) {
@@ -1113,18 +1161,56 @@ composer.onSubmit = async (q) => {
     }
   } finally {
     turn = null;
+    // A question that produced nothing keeps its place in the record of what
+    // was asked — with the retry the composer is already offering.
+    if (pendingTurn) {
+      pendingTurn.classList.remove("pending");
+      pendingTurn.classList.add("unanswered");
+      pendingTurn = null;
+    }
     composer.done();
     placeComposer();
+    void loadSessions();
   }
 };
 
 /* ------------------------------------------------------------------- boot */
 
-// The settings button sits in a strip that expands on hover, so the rail is
-// pinned open while the panel is up — otherwise its anchor slides away.
+side.onNew = () => void newSession();
+side.onPick = (id) => { if (id !== sessionId) void openSession(id); };
+side.onPickSection = (page) => flow.gotoId(page);
+
+$("newsession").addEventListener("click", () => void newSession());
+$("searchmin").addEventListener("click", () => side.focusSearch());
+
+/**
+ * The sidebar's width, which is a reading decision and therefore the reader's.
+ *
+ * Wide it is the session list; narrow it is a strip of icons that still gets
+ * you to a new session and to search. Kept in the same store as the type size
+ * and read before first paint, so it does not snap shut a frame after load.
+ */
+function setSidebar(min: boolean) {
+  document.documentElement.dataset.side = min ? "min" : "";
+  $("sidetoggle").setAttribute("aria-expanded", String(!min));
+  try {
+    const raw = JSON.parse(localStorage.getItem("perpetual.settings") ?? "{}");
+    localStorage.setItem("perpetual.settings",
+      JSON.stringify({ ...raw, sidebar: min ? "min" : "wide" }));
+  } catch { /* a private window must not break the layout */ }
+  // The site's frame changed, so where its end is may have too.
+  placeComposer();
+}
+
+$("sidetoggle").addEventListener("click",
+  () => setSidebar(document.documentElement.dataset.side !== "min"));
+
+// The settings panel is anchored beside its button in the sidebar's foot, so
+// the sidebar is held open while the panel is up — otherwise its anchor slides
+// out from under it.
 mountSettings(
   $("prefsbtn"), $("prefs"),
-  (open) => railHost.classList.toggle("open", open),
+  (open) => sideHost.classList.toggle("pinned", open),
   // Text size and measure change how tall the site is, which changes whether
   // the reader is at the end of it.
   () => placeComposer(),
@@ -1141,17 +1227,6 @@ window.addEventListener("resize", () => {
 // server's sweep is the backstop for the cases where even that fails.
 window.addEventListener("pagehide", () => void retireIfUnused(sessionId, { unloading: true }));
 
-// One way home. "New" was a second button for the same action once the
-// library became the place you ask from.
-$("back").addEventListener("click", () => void showLibrary());
-
-// The rail opens because it was asked to. Hover-to-open meant a panel covering
-// a quarter of the page every time the pointer crossed the left edge.
-$("railtoggle").addEventListener("click", () => {
-  const open = railHost.classList.toggle("open");
-  $("railtoggle").setAttribute("aria-expanded", String(open));
-});
-
 // Keyboard help. The shortcuts existed and nothing said so.
 const keys = $("keys");
 const showKeys = (on: boolean) => { keys.hidden = !on; };
@@ -1159,6 +1234,10 @@ $("keysclose").addEventListener("click", () => showKeys(false));
 window.addEventListener("keydown", (e) => {
   const typing = e.target instanceof HTMLElement
     && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
+  if ((e.key === "b" || e.key === "B") && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    setSidebar(document.documentElement.dataset.side !== "min");
+  }
   if (e.key === "?" && !typing) { e.preventDefault(); showKeys(keys.hidden); }
   if (e.key === "Escape" && !keys.hidden) showKeys(false);
 });
@@ -1171,16 +1250,17 @@ $("badge").textContent = health.replay ? "replay" : health.provider ?? "model";
 // restart — the runtime is built once per process — which is the server-side
 // half of this and a separate piece of work.
 // The last segment only: `accounts/fireworks/models/deepseek-v4-flash-0731`
-// is a path, and the chip is 46px of rail. The full id is in the tooltip.
+// is a path, and the chip is a chip. The full id is in the tooltip.
 $("model").textContent = health.replay ? "scripted" : health.model.split("/").pop() ?? health.model;
 $("model").title = `${health.model} — set by PERPETUAL_MODEL; changing it needs a restart`;
 $("sandbox").textContent = health.sandbox;
-// Replay stamps the whole rail, not a chip. A subtle badge already cost a
+// Replay stamps the whole sidebar, not a chip. A subtle badge already cost a
 // whole evaluation once — a full-height edge cannot be read past.
-railHost.classList.toggle("replay", health.replay);
+sideHost.classList.toggle("replay", health.replay);
 $("modedot").title = health.replay ? "replay — no model" : `${health.model} · ${health.sandbox}`;
 if (!health.hasKey) status("No API key set — export one and restart the controller", "bad");
 
 const hash = /^#\/s\/([a-f0-9]+)$/.exec(location.hash);
+await loadSessions();
 if (hash) await openSession(hash[1]!);
-else await showLibrary();
+else await newSession();
