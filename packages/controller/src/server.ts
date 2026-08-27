@@ -17,7 +17,7 @@ import { createRuntime, PROVIDERS, type Runtime } from "./runtime.ts";
 import { createReplayRuntime } from "./replay-runtime.ts";
 import { SessionStore } from "./sessions.ts";
 import { readSite } from "./site.ts";
-import { readApps, commandFor, APPS_REL } from "./apps.ts";
+import { readApps, commandFor, fieldEnv, APPS_REL } from "./apps.ts";
 import { createShell } from "./shell/tool.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
@@ -348,8 +348,8 @@ async function act(req: IncomingMessage, res: ServerResponse, id: string) {
   const body = await new Promise<string>((r) => {
     let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b));
   });
-  const { app, block, option } = JSON.parse(body || "{}") as
-    { app?: string; block?: string; option?: string };
+  const { app, block, option, values } = JSON.parse(body || "{}") as
+    { app?: string; block?: string; option?: string; values?: Record<string, unknown> };
   if (!app || !block || !option) return json(res, 400, { error: "app, block and option" });
 
   const { apps } = await readApps(store.siteDir(id));
@@ -363,7 +363,13 @@ async function act(req: IncomingMessage, res: ServerResponse, id: string) {
 
   const shell = createShell(sandboxFor(id, sealedFor(await readSite(store.siteDir(id)),
     await store.read(id))));
-  const r = await shell.run({ command: found.run, timeoutSec: ACT_TIMEOUT_SEC });
+  const r = await shell.run({
+    command: found.run,
+    timeoutSec: ACT_TIMEOUT_SEC,
+    // Only the fields the form itself declared, and only as environment. See
+    // `fieldEnv`: this is the seam where reader-authored text meets a shell.
+    ...(found.fields ? { env: fieldEnv(values, found.fields) } : {}),
+  });
 
   // Whatever the command did to the view, the answer is the view as it now is.
   const after = await readApps(store.siteDir(id));

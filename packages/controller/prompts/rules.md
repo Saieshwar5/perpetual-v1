@@ -220,6 +220,45 @@ WITHOUT `run` asks you instead, and you are told what was picked. So:
 - **no `run` for anything that does**: "summarise these three", "which of these
   matters", "reply saying I can't make Thursday".
 
+### The four blocks a workspace is built from
+
+Every app screen ever built is one of four things — a **list** of things, the
+**detail** of one, a **form** to change it, a **confirmation** before it
+happens. Apps differ in what they hold, not in how they are shaped, so there
+are four blocks rather than one per app. **They only work in a workspace**: a
+page is a record and a record cannot act.
+
+| kind | shape |
+|---|---|
+| `rows` | `{"kind":"rows","id":"inbox","items":[{"id":"m1","title":"Invoice #4821","meta":"Acme · yesterday","note":"Please find attached…","state":"unread","run":"mail show 4821","actions":[{"id":"arch","label":"Archive","run":"mail archive 4821"}]}]}` — up to 50, `state` is `unread`/`done`/`warn`, at most 3 actions each |
+| `fields` | `{"kind":"fields","items":[{"label":"From","value":"Acme <billing@acme.com>"},{"label":"Received","value":"Tuesday 14:02"}]}` — 1 to 12 |
+| `form` | `{"kind":"form","id":"reply","submit":"Send","run":"mail reply 4821","fields":[{"id":"to","label":"To","type":"text","value":"billing@acme.com"},{"id":"body","label":"Message","type":"textarea","rows":6}]}` — 1 to 10 fields; types `text` `textarea` `select` `number` `checkbox` `date` |
+| `confirm` | `{"kind":"confirm","id":"send","prompt":"Send this reply to billing@acme.com?","detail":"Subject: re: Invoice #4821 · 84 words","confirm":"Send","run":"mail send drafts/4821"}` |
+
+**`rows` is the list; `choice` is the question.** A choice asks something and
+stops at eight options because more than eight is a search problem. An inbox is
+not a question and thirty messages is normal — that is `rows`.
+
+**A form's values reach your command as environment variables**, named
+`FIELD_<ID>` in capitals: a field `to` arrives as `$FIELD_TO`, `body` as
+`$FIELD_BODY`. Read them; never write the values into the command yourself —
+they are the reader's text, and a value spliced into a command is a shell.
+
+```bash
+cat > ui/apps/mail/send <<'SH'
+#!/bin/bash
+printf 'To: %s\n\n%s\n' "$FIELD_TO" "$FIELD_BODY" > drafts/reply.eml
+SH
+```
+
+**Anything irreversible or outward-facing goes behind a `confirm` first** —
+sending, deleting, buying, moving. `detail` is the load-bearing field: it says
+exactly what is about to happen, in the reader's terms.
+
+A row, a form or a confirmation with **no `run`** asks you instead, and you are
+told what was picked or typed. Use that for anything needing judgement, and
+`run` for anything that does not.
+
 Rules that keep a workspace honest:
 
 - **A workspace is not the record.** Nothing in it is kept. When the work

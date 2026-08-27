@@ -40,7 +40,8 @@ export class AppPanel {
   private tabs: HTMLElement;
 
   /** A row that carries a command: run it, and show whatever the view became. */
-  onRun: (app: string, block: string, option: string) => void = () => {};
+  onRun: (app: string, block: string, option: string,
+    values?: Record<string, string | boolean>) => void = () => {};
   /** A row that does not: ask the agent, carrying what was picked. */
   onAsk: (selection: Selection) => void = () => {};
   /** Typed into the panel's own composer, which is scoped to this workspace. */
@@ -142,8 +143,60 @@ export class AppPanel {
           block: b.id, option: o.id, label: o.label, prompt: b.prompt,
         });
       },
+
+      /**
+       * A row, a row's action, or a confirmation.
+       *
+       * Which of the two paths it takes is decided by the FILE, not here: the
+       * controller looks the option up and tells us whether anything ran. A
+       * row with no command is a question, and asking it is the fallback.
+       */
+      act: (blockId, option, label) => {
+        if (option === "cancel") { this.onCancel(app.id, blockId); return; }
+        this.onRun(app.id, blockId, option);
+        this.pendingAsk = { blockId, option, label };
+      },
+
+      submit: (blockId, values) => {
+        this.onRun(app.id, blockId, "submit", values);
+        // A form with no command is a form the agent fills in for you: what was
+        // typed has to travel with the question, or it is lost.
+        this.pendingAsk = {
+          blockId, option: "submit",
+          label: Object.entries(values)
+            .filter(([, v]) => v !== "" && v !== false)
+            .map(([k, v]) => `${k}: ${v === true ? "yes" : v}`).join(" · ") || "submitted",
+        };
+      },
     };
   }
+
+  /**
+   * What to ask if the controller reports that nothing ran.
+   *
+   * A row without a command is not broken — it is a question for the agent,
+   * and the answer to "nothing ran" is to ask it rather than to do nothing.
+   */
+  private pendingAsk: { blockId: string; option: string; label: string } | null = null;
+
+  /** Called by the caller when `/act` came back saying it ran nothing. */
+  askInstead() {
+    const p = this.pendingAsk;
+    this.pendingAsk = null;
+    const app = this.current ? this.apps.get(this.current) : undefined;
+    if (!p || !app) return;
+    const prompt = app.blocks.find((b) => b.id === p.blockId && b.kind === "confirm");
+    this.onAsk({
+      app: app.id, page: app.id, control: "choice",
+      block: p.blockId, option: p.option, label: p.label,
+      ...(prompt && prompt.kind === "confirm" ? { prompt: prompt.prompt } : {}),
+    });
+  }
+
+  /** A confirmation declined. Nothing runs, and nobody is asked. */
+  onCancel: (app: string, block: string) => void = () => {};
+
+
 
   private paint() {
     this.root.hidden = !this.open;

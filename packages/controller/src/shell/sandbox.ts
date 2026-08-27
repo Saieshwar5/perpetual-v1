@@ -138,8 +138,17 @@ export function ulimits(cfg: SandboxConfig): string {
   return `ulimit ${parts.join(" ")} 2>/dev/null || true`;
 }
 
-/** Build the argv that runs `script` under containment. */
-export function wrapCommand(script: string, cfg: SandboxConfig): { file: string; args: string[] } {
+/**
+ * Build the argv that runs `script` under containment.
+ *
+ * `extra` is per-run environment — a workspace form's values, which reach the
+ * command this way BECAUSE they must never be spliced into it. Names are
+ * checked here as well as at the caller: `--setenv` with a name containing an
+ * equals sign or a null would be a second way to say something.
+ */
+export function wrapCommand(
+  script: string, cfg: SandboxConfig, extra: Record<string, string> = {},
+): { file: string; args: string[] } {
   if (cfg.unsafe) return { file: "/bin/bash", args: ["-c", script] };
 
   const args = [
@@ -169,6 +178,10 @@ export function wrapCommand(script: string, cfg: SandboxConfig): { file: string;
     "--chdir", MOUNT,
   ];
   for (const [k, v] of Object.entries(sandboxEnv(MOUNT))) args.push("--setenv", k, v);
+  for (const [k, v] of Object.entries(extra)) {
+    if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) continue;
+    args.push("--setenv", k, v);
+  }
   args.push("/bin/bash", "-c", script);
   return { file: "bwrap", args };
 }

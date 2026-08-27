@@ -161,16 +161,127 @@ export interface Figure extends BlockBase {
   svg?: string;
 }
 
+/* ------------------------------------------------------ the app quartet */
+
+/**
+ * Four shapes, and between them they are nearly every app screen ever built:
+ *
+ *   a LIST of things  ->  the DETAIL of one  ->  a FORM to change it  ->  a
+ *   CONFIRMATION before it happens
+ *
+ * Apps differ in what they hold, not in how they are shaped: an inbox, a file
+ * list, search results, an order history and a day's agenda are the same
+ * screen with different contents. So these are four blocks rather than one per
+ * app, and the test for a fifth is whether it would serve three unrelated
+ * ones.
+ *
+ * WORKSPACES ONLY. A page is a record, and a record does not act — a button on
+ * a sealed section is either a lie or a hole in the seal. The site reader
+ * rejects them, by name, with the reason.
+ */
+
+/**
+ * The list primitive.
+ *
+ * `choice` was doing this job and it is the wrong tool: a choice is a
+ * QUESTION — it has a prompt, it stops at eight options because more than
+ * eight is a search problem, and answering it is recorded as an answer. An
+ * inbox is not a question, thirty messages is normal, and a row needs more
+ * than one thing you can do to it.
+ */
+export interface Rows extends BlockBase {
+  kind: "rows";
+  /** Required: an action has to say which list it came from. */
+  id: string;
+  items: {
+    id: string;
+    title: string;
+    /** The line under it — sender, path, size, date. What people scan. */
+    meta?: string;
+    /** One line of the thing itself: a subject line, the first line of a file. */
+    note?: string;
+    /** A small, fixed vocabulary. Anything freer becomes decoration. */
+    state?: "unread" | "done" | "warn";
+    /** What picking the row itself does. Without it, picking asks the agent. */
+    run?: string;
+    /** Up to three, beside the row: Archive, Delete, Open. */
+    actions?: { id: string; label: string; run?: string }[];
+  }[];
+}
+
+/** The detail primitive: the key/value header every detail view opens with. */
+export interface Fields extends BlockBase {
+  kind: "fields";
+  items: { label: string; value: string }[];
+}
+
+/**
+ * The one that turns a workspace from something you read into something you
+ * use. Without it there is no reply, no rename, no filter, no quantity.
+ *
+ * The values reach the command as ENVIRONMENT, never as text spliced into it.
+ * A row's command is written by the agent and carries exactly the agent's own
+ * authority; a form's values are written by the READER, and interpolating
+ * those into a shell string would make a text field into a shell.
+ */
+export interface Form extends BlockBase {
+  kind: "form";
+  id: string;
+  /** What the button says. "Send", "Rename", "Search". */
+  submit?: string;
+  /** What submitting runs. Without it, submitting asks the agent instead. */
+  run?: string;
+  fields: {
+    id: string;
+    label: string;
+    type: "text" | "textarea" | "select" | "number" | "checkbox" | "date";
+    /** Pre-filled, because the agent usually knows most of the answer. */
+    value?: string;
+    placeholder?: string;
+    /** `select` only. */
+    options?: { value: string; label: string }[];
+    /** `textarea` only: how tall it starts. */
+    rows?: number;
+    required?: boolean;
+  }[];
+}
+
+/**
+ * The gate. Reads are cheap and writes are gated (plans/21 §4): anything
+ * outward-facing or irreversible goes behind one of these.
+ *
+ * `detail` is the load-bearing field — it says exactly what is about to
+ * happen, which is the difference between consent and a habit of clicking yes.
+ */
+export interface Confirm extends BlockBase {
+  kind: "confirm";
+  id: string;
+  prompt: string;
+  detail?: string;
+  /** The button that does it. Never pre-focused, in the renderer. */
+  confirm?: string;
+  cancel?: string;
+  run?: string;
+}
+
 export type Block =
   | Heading | Section | Prose | Quote | List | Metrics | Chart
-  | Table | Split | Flow | Code | Note | Link | Figure | Next | Choice;
+  | Table | Split | Flow | Code | Note | Link | Figure | Next | Choice
+  | Rows | Fields | Form | Confirm;
 
 export type BlockKind = Block["kind"];
 
 export const BLOCK_KINDS: readonly BlockKind[] = [
   "heading", "section", "prose", "quote", "list", "metrics", "chart",
   "table", "split", "flow", "code", "note", "link", "figure", "next", "choice",
+  "rows", "fields", "form", "confirm",
 ];
+
+/** The four that only mean anything in a workspace. See the quartet above. */
+export const APP_KINDS: readonly BlockKind[] = ["rows", "fields", "form", "confirm"];
+
+/** A list, not a scroll of a thousand. Past this, narrow it or paginate. */
+export const MAX_ROWS = 50;
 
 export type Valid<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -295,6 +406,29 @@ export function textFields(b: Block): { where: string; text: string; honoured: b
       break;
     case "flow":
       b.steps.forEach((st, i) => out.push({ where: `steps[${i}]`, text: st.label, honoured: false }));
+      break;
+    // The quartet's text is all labels and values: read for stray markup, but
+    // never given marks of its own. A row title with an asterisk in it is a
+    // filename, not emphasis.
+    case "rows":
+      b.items.forEach((it, i) => {
+        out.push({ where: `items[${i}].title`, text: it.title, honoured: false });
+        if (it.meta) out.push({ where: `items[${i}].meta`, text: it.meta, honoured: false });
+        if (it.note) out.push({ where: `items[${i}].note`, text: it.note, honoured: false });
+      });
+      break;
+    case "fields":
+      b.items.forEach((it, i) => {
+        out.push({ where: `items[${i}].label`, text: it.label, honoured: false });
+        out.push({ where: `items[${i}].value`, text: it.value, honoured: false });
+      });
+      break;
+    case "form":
+      b.fields.forEach((f, i) => out.push({ where: `fields[${i}].label`, text: f.label, honoured: false }));
+      break;
+    case "confirm":
+      out.push({ where: "prompt", text: b.prompt, honoured: false });
+      if (b.detail) out.push({ where: "detail", text: b.detail, honoured: false });
       break;
     case "chart": case "figure":
       if (b.caption) out.push({ where: "caption", text: b.caption, honoured: false });
@@ -454,6 +588,146 @@ export function validateBlock(v: unknown): Valid<Block> {
               "your sandbox exactly as if you had run it yourself.");
           }
         }
+      }
+      break;
+    }
+
+    /* ------------------------------------------------ the app quartet */
+
+    case "rows": {
+      if (!str(v.id)) {
+        return bad('needs an `id`: a row\'s action has to say which list it came ' +
+          'from. {"kind":"rows","id":"inbox",…}');
+      }
+      if (!Array.isArray(v.items) || v.items.length === 0) {
+        return bad("`items` must hold at least one row.");
+      }
+      if (v.items.length > MAX_ROWS) {
+        return bad(`${v.items.length} rows is more than a list (max ${MAX_ROWS}). ` +
+          "Narrow it, or make one row the way to see the rest.");
+      }
+      const rowIds = new Set<string>();
+      for (const [i, it] of v.items.entries()) {
+        if (!isRec(it)) return bad(`items[${i}] is not an object`);
+        if (!str(it.id) || !ID_RE.test(it.id as string)) {
+          return bad(`items[${i}].id must be a short name — lowercase letters, digits ` +
+            "and dashes. It is what comes back when this row is picked.");
+        }
+        if (rowIds.has(it.id as string)) {
+          return bad(`items[${i}].id "${it.id}" is used twice. Two rows that answer to ` +
+            "the same name cannot be told apart.");
+        }
+        rowIds.add(it.id as string);
+        if (!str(it.title)) return bad(`items[${i}].title is missing (what the reader reads)`);
+        for (const f of ["meta", "note"] as const) {
+          if (it[f] != null && !str(it[f])) return bad(`items[${i}].${f} is empty — omit it`);
+        }
+        if (it.state != null && !["unread", "done", "warn"].includes(it.state as string)) {
+          return bad(`items[${i}].state is ${JSON.stringify(it.state)}. It is one of ` +
+            "`unread`, `done`, `warn` — a small fixed set, so a state means the same " +
+            "thing everywhere.");
+        }
+        if (it.run != null && (!str(it.run) || (it.run as string).length > MAX_RUN)) {
+          return bad(`items[${i}].run must be a command under ${MAX_RUN} characters`);
+        }
+        if (it.actions != null) {
+          if (!Array.isArray(it.actions) || it.actions.length > 3) {
+            return bad(`items[${i}].actions holds at most 3. More than three things ` +
+              "beside a row is a menu, and a menu belongs on the detail screen.");
+          }
+          const actIds = new Set<string>();
+          for (const [j, a] of it.actions.entries()) {
+            if (!isRec(a)) return bad(`items[${i}].actions[${j}] is not an object`);
+            if (!str(a.id) || !ID_RE.test(a.id as string)) {
+              return bad(`items[${i}].actions[${j}].id must be a short name`);
+            }
+            if (actIds.has(a.id as string)) {
+              return bad(`items[${i}].actions[${j}].id "${a.id}" is used twice on one row`);
+            }
+            actIds.add(a.id as string);
+            if (!str(a.label)) return bad(`items[${i}].actions[${j}].label is missing`);
+            if (a.run != null && (!str(a.run) || (a.run as string).length > MAX_RUN)) {
+              return bad(`items[${i}].actions[${j}].run must be a command under ${MAX_RUN}`);
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case "fields": {
+      if (!Array.isArray(v.items) || v.items.length === 0 || v.items.length > 12) {
+        return bad("`items` must hold 1 to 12 label/value pairs. This is the header of " +
+          "a detail view — more than a dozen facts is the detail itself, which is prose " +
+          "or a table.");
+      }
+      for (const [i, it] of v.items.entries()) {
+        if (!isRec(it)) return bad(`items[${i}] is not an object`);
+        if (!str(it.label)) return bad(`items[${i}].label is missing`);
+        if (!str(it.value)) return bad(`items[${i}].value is missing`);
+      }
+      break;
+    }
+
+    case "form": {
+      if (!str(v.id)) return bad('needs an `id`: {"kind":"form","id":"reply",…}');
+      if (!Array.isArray(v.fields) || v.fields.length === 0 || v.fields.length > 10) {
+        return bad("`fields` must hold 1 to 10 inputs. A form longer than ten is a " +
+          "questionnaire — ask for what you need now and ask again later.");
+      }
+      if (v.submit != null && !str(v.submit)) return bad("`submit` is empty — omit it");
+      if (v.run != null && (!str(v.run) || (v.run as string).length > MAX_RUN)) {
+        return bad(`\`run\` must be a command under ${MAX_RUN} characters. The values ` +
+          "reach it as environment variables named after the fields — do not write them " +
+          "into the command yourself.");
+      }
+      const fieldIds = new Set<string>();
+      for (const [i, f] of v.fields.entries()) {
+        if (!isRec(f)) return bad(`fields[${i}] is not an object`);
+        if (!str(f.id) || !ID_RE.test(f.id as string)) {
+          return bad(`fields[${i}].id must be a short name — it names the value on the ` +
+            "way to your command.");
+        }
+        if (fieldIds.has(f.id as string)) {
+          return bad(`fields[${i}].id "${f.id}" is used twice`);
+        }
+        fieldIds.add(f.id as string);
+        if (!str(f.label)) return bad(`fields[${i}].label is missing`);
+        const types = ["text", "textarea", "select", "number", "checkbox", "date"];
+        if (!str(f.type) || !types.includes(f.type as string)) {
+          return bad(`fields[${i}].type is ${JSON.stringify(f.type)}. One of: ${
+            types.join(", ")}.`);
+        }
+        if (f.type === "select") {
+          if (!Array.isArray(f.options) || f.options.length < 2) {
+            return bad(`fields[${i}] is a select and needs 2 or more \`options\`, each ` +
+              '{"value":…,"label":…}.');
+          }
+          for (const [j, o] of f.options.entries()) {
+            if (!isRec(o) || !str(o.value) || !str(o.label)) {
+              return bad(`fields[${i}].options[${j}] needs a value and a label`);
+            }
+          }
+        }
+      }
+      break;
+    }
+
+    case "confirm": {
+      if (!str(v.id)) return bad('needs an `id`: {"kind":"confirm","id":"send",…}');
+      if (!str(v.prompt)) {
+        return bad("`prompt` must ask the question in one line — " +
+          '"Send this reply to billing@acme.com?"');
+      }
+      if (v.detail != null && !str(v.detail)) {
+        return bad("`detail` is empty — omit it. It is what says exactly what is about " +
+          "to happen, which is the difference between consent and a habit of saying yes.");
+      }
+      for (const f of ["confirm", "cancel"] as const) {
+        if (v[f] != null && !str(v[f])) return bad(`\`${f}\` is empty — omit it`);
+      }
+      if (v.run != null && (!str(v.run) || (v.run as string).length > MAX_RUN)) {
+        return bad(`\`run\` must be a command under ${MAX_RUN} characters`);
       }
       break;
     }

@@ -7,7 +7,7 @@
  * 002 without anyone having to enforce consistency.
  */
 import { INLINE_SPLIT_RE } from "@perpetual/shared/blocks";
-import type { Block, Choice } from "@perpetual/shared/blocks";
+import type { Block, Choice, Form } from "@perpetual/shared/blocks";
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K, cls?: string, text?: string,
@@ -60,6 +60,19 @@ export interface BlockActions {
   picked?: (blockId: string) => string | null;
   /** The reader picked one. The click carries the option's own id, not its words. */
   choose?: (block: Choice, option: { id: string; label: string }) => void;
+
+  /* --------------------------------------------------- the app quartet */
+
+  /**
+   * A row, a row's action, or a confirmation was taken.
+   *
+   * `option` is the token that goes back: a row id, `row.action` for one of
+   * the buttons beside it, or `confirm` for a confirmation's yes. The renderer
+   * builds the token and nothing downstream has to parse a label.
+   */
+  act?: (blockId: string, option: string, label: string) => void;
+  /** A form was submitted, with what the reader typed into it. */
+  submit?: (blockId: string, values: Record<string, string | boolean>) => void;
 }
 
 /**
@@ -70,6 +83,41 @@ export interface BlockActions {
  * re-resolves through it after the agent has moved things around. One place
  * does it, so no case in the switch below has to remember to.
  */
+/** One input, built from its declared type. Six types, and no others. */
+function fieldInput(formId: string, f: Form["fields"][number]): HTMLElement {
+  const id = `f-${formId}-${f.id}`;
+  if (f.type === "textarea") {
+    const t = document.createElement("textarea");
+    t.id = id;
+    t.rows = Math.min(Math.max(2, f.rows ?? 4), 16);
+    if (f.value) t.value = f.value;
+    if (f.placeholder) t.placeholder = f.placeholder;
+    if (f.required) t.required = true;
+    return t;
+  }
+  if (f.type === "select") {
+    const sel = document.createElement("select");
+    sel.id = id;
+    for (const o of f.options ?? []) {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label;
+      if (f.value === o.value) opt.selected = true;
+      sel.append(opt);
+    }
+    return sel;
+  }
+  const i = document.createElement("input");
+  i.id = id;
+  i.type = f.type === "checkbox" ? "checkbox" : f.type === "number" ? "number"
+    : f.type === "date" ? "date" : "text";
+  if (f.type === "checkbox") i.checked = f.value === "1" || f.value === "true";
+  else if (f.value) i.value = f.value;
+  if (f.placeholder) i.placeholder = f.placeholder;
+  if (f.required) i.required = true;
+  return i;
+}
+
 export function renderBlock(b: Block, on: BlockActions = {}): HTMLElement {
   const node = buildBlock(b, on);
   if (b.id) node.dataset.blockId = b.id;
@@ -213,6 +261,99 @@ function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
         opts.append(btn);
       }
       wrap.append(opts);
+      return wrap;
+    }
+
+    /* ------------------------------------------------ the app quartet */
+
+    case "rows": {
+      // A list you scan and act on, not a question you answer. The row itself
+      // is the primary action; anything beside it is secondary and looks it.
+      const wrap = el("div", "rows");
+      for (const it of b.items) {
+        const row = el("div", `row${it.state ? ` is-${it.state}` : ""}`);
+        const main = el("button", "rowmain");
+        main.type = "button";
+        main.append(el("span", "rowtitle", it.title));
+        if (it.meta) main.append(el("span", "rowmeta", it.meta));
+        if (it.note) main.append(el("span", "rownote", it.note));
+        main.addEventListener("click", () => on.act?.(b.id, it.id, it.title));
+        row.append(main);
+
+        if (it.actions?.length) {
+          const acts = el("div", "rowacts");
+          for (const a of it.actions) {
+            const btn = el("button", "rowact");
+            btn.type = "button";
+            btn.textContent = a.label;
+            btn.addEventListener("click", (e) => {
+              e.stopPropagation();          // the row's own action is not this one
+              on.act?.(b.id, `${it.id}.${a.id}`, a.label);
+            });
+            acts.append(btn);
+          }
+          row.append(acts);
+        }
+        wrap.append(row);
+      }
+      return wrap;
+    }
+
+    case "fields": {
+      const dl = el("dl", "fields");
+      for (const f of b.items) {
+        dl.append(el("dt", undefined, f.label));
+        dl.append(el("dd", undefined, f.value));
+      }
+      return dl;
+    }
+
+    case "form": {
+      const form = document.createElement("form");
+      form.className = "appform";
+      for (const f of b.fields) {
+        const row = el("div", "frow");
+        const label = el("label", "flabel", f.label);
+        label.htmlFor = `f-${b.id}-${f.id}`;
+        row.append(label);
+        row.append(fieldInput(b.id, f));
+        form.append(row);
+      }
+      const submit = el("button", "fsubmit", b.submit ?? "Submit");
+      (submit as HTMLButtonElement).type = "submit";
+      form.append(submit);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const values: Record<string, string | boolean> = {};
+        for (const f of b.fields) {
+          const node = form.querySelector<HTMLInputElement | HTMLTextAreaElement
+            | HTMLSelectElement>(`#f-${CSS.escape(b.id)}-${CSS.escape(f.id)}`);
+          if (!node) continue;
+          values[f.id] = f.type === "checkbox"
+            ? (node as HTMLInputElement).checked
+            : node.value;
+        }
+        on.submit?.(b.id, values);
+      });
+      return form;
+    }
+
+    case "confirm": {
+      // The dangerous one is never the default. `detail` says exactly what is
+      // about to happen, which is the difference between consent and a habit
+      // of saying yes — so it is shown, not tucked away.
+      const wrap = el("div", "confirm");
+      wrap.append(el("p", "cprompt", b.prompt));
+      if (b.detail) wrap.append(el("p", "cdetail", b.detail));
+      const acts = el("div", "cacts");
+      const no = el("button", "cno", b.cancel ?? "Not yet");
+      (no as HTMLButtonElement).type = "button";
+      no.addEventListener("click", () => on.act?.(b.id, "cancel", b.cancel ?? "Not yet"));
+      const yes = el("button", "cyes", b.confirm ?? "Confirm");
+      (yes as HTMLButtonElement).type = "button";
+      yes.addEventListener("click", () => on.act?.(b.id, "confirm", b.confirm ?? "Confirm"));
+      acts.append(no, yes);
+      wrap.append(acts);
       return wrap;
     }
 

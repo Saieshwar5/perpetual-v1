@@ -24,7 +24,8 @@
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { validateBlock, checkMarkup, textFields, type Block } from "@perpetual/shared/blocks";
+import { APP_KINDS, validateBlock, checkMarkup, textFields, type Block }
+  from "@perpetual/shared/blocks";
 import { sanitizeSvg } from "./svg.ts";
 import type { Layout, Page, Problem, Site, Tier } from "@perpetual/shared/site";
 
@@ -239,6 +240,20 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
                  "Use `section` for the breaks inside a long explanation.",
       });
     }
+  }
+
+  // The app quartet belongs to a workspace, and only there. A record does not
+  // act: a button on a sealed section is either a lie — nothing happens — or a
+  // hole in the seal. Named here rather than in the block validator, because
+  // the same block IS valid a directory away.
+  for (const b of blocks) {
+    if (!(APP_KINDS as readonly string[]).includes(b.kind)) continue;
+    problems.push({
+      page: id,
+      message: `\`${b.kind}\` is a workspace block and this is a page. A page is a ` +
+               "record — it is sealed when this turn ends and it cannot act. Put it in " +
+               "`ui/apps/<name>/view.ndjson` instead, where the reader can work with it.",
+    });
   }
 
   // `next` is where the page hands over, so it goes where a page hands over.

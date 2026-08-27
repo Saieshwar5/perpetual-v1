@@ -420,7 +420,10 @@ let sideWasWide = false;
  * A row that carries its own command. No model, no turn, no cost — the
  * controller runs it in the same sandbox and hands back what the view became.
  */
-async function runRow(app: string, block: string, option: string) {
+async function runRow(
+  app: string, block: string, option: string,
+  values?: Record<string, string | boolean>,
+) {
   if (!sessionId || composer.busy) return;
   panel.working(true);
   panel.note("");
@@ -428,7 +431,7 @@ async function runRow(app: string, block: string, option: string) {
     const r = await fetch(`/sessions/${sessionId}/act`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ app, block, option }),
+      body: JSON.stringify({ app, block, option, ...(values ? { values } : {}) }),
     });
     const out = await r.json() as {
       ran?: boolean; exitCode?: number; output?: string;
@@ -436,6 +439,9 @@ async function runRow(app: string, block: string, option: string) {
     };
     if (out.error) { panel.note(out.error, true); return; }
     if (out.app) panel.set(out.app);
+    // Nothing ran, which is not a failure: a row or a form without a command is
+    // a question for the agent, and asking it is what the reader meant.
+    if (out.ran === false) { panel.askInstead(); return; }
     // A command that failed says so, with the tail that explains it. Silence
     // would look exactly like a row that does nothing.
     if (out.ran && out.exitCode !== 0) {
@@ -448,7 +454,11 @@ async function runRow(app: string, block: string, option: string) {
   }
 }
 
-panel.onRun = (app, block, option) => void runRow(app, block, option);
+panel.onRun = (app, block, option, values) => void runRow(app, block, option, values);
+
+// Declining a confirmation is a real answer: nothing runs, nobody is asked,
+// and saying so is better than a button that appears to do nothing.
+panel.onCancel = () => panel.note("Left as it was.");
 
 panel.onAsk = (selection) => {
   pendingSelection = selection;
