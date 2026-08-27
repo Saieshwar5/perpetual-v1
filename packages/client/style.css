@@ -63,8 +63,9 @@
   --gutter: 32px;
   --column: calc(var(--page) - var(--gutter) * 2);
 
-  --rail: 46px;
-  --rail-open: 300px;
+  /* The sidebar, in its two widths. One page means the chrome is permanent,
+     so its width is a reading decision the reader makes and we remember. */
+  --side: 264px;
   --ease: cubic-bezier(.22, 1, .36, 1);
 }
 
@@ -121,174 +122,138 @@ button { font: inherit; color: inherit; cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 [hidden] { display: none !important; }
 
-/* ================================================================ library */
+/* ================================================================== app */
 
-.lib { min-height: 100vh; padding: 8vh 24px 120px; }
-.lib-inner { max-width: 1000px; margin: 0 auto; }
+/* One page, two permanent columns. There used to be two `.view` sections and
+   the app flipped `hidden` between them; the composer was physically
+   re-parented across the gap. Both are gone: the sidebar and the site are
+   always both here, and switching sessions changes only what is in the middle. */
+.app { position: fixed; inset: 0; }
+html[data-side="min"] { --side: 58px; }
 
-.lib-head { margin-bottom: 26px; }
-.lib-head h1 {
-  font-family: var(--serif); font-weight: 500; font-size: clamp(2.2rem, 5vw, 3.1rem);
-  margin: 0; letter-spacing: -.02em;
-}
-.sub { margin: 8px 0 0; color: var(--ink-2); font-size: .95rem; }
+/* ============================================================== sidebar */
 
-/* The composer's other home. On this view it is the primary action, so it sits
-   in the reading order between the title and the grid: here is what this is,
-   ask something, or pick up where you left. */
-.libhost { margin-bottom: 10px; }
-/* Always full here: on the library there is no page to be quiet about, and
-   asking is the only thing to do. */
-.libhost .pill,
-.libhost .pill[data-size="min"] {
-  width: 100%;
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: 13px;
-  box-shadow: 0 10px 28px -24px rgba(0, 0, 0, .5);
-}
-.libhost .pill { border: 1px solid var(--line-2); border-radius: 13px; padding: 6px; }
-.libhost .pill .pform { display: flex; padding: 13px 15px; }
-
-
-.matchline {
-  min-height: 1.2em; margin-bottom: 22px;
-  font-size: .78rem; color: var(--ink-3); font-variant-numeric: tabular-nums;
-}
-
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
-
-.card {
-  display: flex; flex-direction: column; gap: 10px; text-align: left;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-  padding: 18px 18px 14px; min-height: 138px;
-  transition: border-color .15s, transform .15s var(--ease);
-}
-.card:hover { border-color: var(--line-2); transform: translateY(-2px); }
-.card h3 {
-  margin: 0; font-family: var(--serif); font-weight: 500; font-size: 1.15rem;
-  letter-spacing: -.01em;
-}
-.card .last {
-  margin: 0; color: var(--ink-2); font-size: .875rem; line-height: 1.5; flex: 1;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
-.card .cmeta {
-  color: var(--ink-3); font-size: .75rem; font-variant-numeric: tabular-nums;
-  border-top: 1px solid var(--line); padding-top: 10px;
-}
-.empty { color: var(--ink-3); }
-
-/* ================================================================ session */
-
-.sess { position: fixed; inset: 0; }
-
-/* ---------------------------------------------------------- rail zones */
-
-/* The chrome, in the dimension we have to spare. Identity at the top,
-   navigation in the middle, environment at the foot — and none of it costs a
-   pixel of height, which is the dimension a laptop is short of. */
-
-.railtop, .railfoot {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px; flex-shrink: 0;
-}
-.railtop { border-bottom: 1px solid transparent; }
-.rail.open .railtop { border-bottom-color: var(--line); }
-
-.railfoot {
-  flex-wrap: wrap; margin-top: auto;
-  border-top: 1px solid transparent; justify-content: center;
-}
-.rail.open .railfoot {
-  border-top-color: var(--line); justify-content: flex-start;
-}
-
-.railbtn {
-  background: none; border: 1px solid transparent; border-radius: 8px;
-  padding: 5px 9px; font-size: .85rem; color: var(--ink-2); flex-shrink: 0;
-}
-.railbtn:hover { background: var(--surface-2); color: var(--ink); }
-.railbtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
-
-/* A 46px strip cannot hold text — rotated is bad and truncated is worse. The
-   ticks say where you are; the name is only wanted when you are orienting,
-   which is exactly when you would hover. */
-.rail .wide { display: none; }
-.rail.open .wide { display: flex; }
-.rail.open .narrow { display: none; }
-
-.stitle {
-  font-weight: 500; font-size: .88rem; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis;
-}
-.count {
-  font-size: .68rem; color: var(--ink-3); font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-}
-.env { flex-direction: column; align-items: flex-start; gap: 4px; }
-.chip {
-  color: var(--ink-3); font-family: var(--mono); font-size: .66rem;
-  border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; white-space: nowrap;
-}
-.dot {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex-shrink: 0;
-}
-/* What the last turn cost. Always computed, never shown until now — and it is
-   the number you actually want when comparing two models. */
-.chip.spent { color: var(--ink-2); border-color: var(--line-2); }
-.rail.replay .dot { background: var(--warn); }
-
-/* ------------------------------------------------------------------- rail */
-
-.rail {
-  position: absolute; inset: 0 auto 0 0; width: var(--rail); z-index: 25;
+.side {
+  position: absolute; inset: 0 auto 0 0; width: var(--side); z-index: 25;
   display: flex; flex-direction: column;
   background: var(--surface); border-right: 1px solid var(--line);
-  overflow: hidden; transition: width .18s var(--ease);
+  overflow: hidden;
+  transition: width .18s var(--ease);
 }
-/* Replay is a property of the whole session, so it marks the whole rail.
+/* Replay is a property of the whole session, so it marks the whole edge.
    An inset shadow rather than a border, so nothing shifts. */
-.rail.replay { box-shadow: inset -3px 0 0 var(--warn); }
+.side.replay { box-shadow: inset -3px 0 0 var(--warn); }
 
-.railmid { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-/* Open, it still overlays rather than pushing the page — moving the page would
-   re-wrap every line and throw the reader's position away, which is worse than
-   a panel on top of it. What was wrong was that HOVER did this: brushing the
-   left edge covered a quarter of the page with something nobody asked for. Now
-   it takes a click, and what it covers is dimmed so the overlap reads as
-   deliberate instead of broken. */
-.rail.open { width: var(--rail-open); box-shadow: 14px 0 40px -24px rgba(0,0,0,.45); }
-/* Fixed rather than absolute: `.site` is the scroller now, so an absolute
-   overlay inside it would scroll away with the content it is dimming. */
-.rail.open ~ .site::after {
-  content: ""; position: fixed; inset: 0 0 0 var(--rail); z-index: 20;
-  background: var(--bg); opacity: .55;
-  animation: dimin .18s var(--ease);
-}
-@keyframes dimin { from { opacity: 0; } }
-.railtoggle { margin-left: auto; }
-.rail.open .railtoggle { transform: rotate(90deg); }
+/* Narrow, the labels go and the icons stay. `.narrow` is the opposite pair:
+   the two controls that need a home when there is no room for a label. */
+html[data-side="min"] .side .wide { display: none; }
+/* The pair of controls that need a home when there is no room for a label.
+   Specificity, not source order: `.sidebtn` sets a display of its own, and a
+   bare `.narrow` rule loses to it wherever it sits in the file. */
+.side .narrow { display: none; }
+html[data-side="min"] .side .narrow { display: flex; }
 
-.ticks {
-  display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 18px 0;
+.sidehead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 10px 6px;
 }
-.rail.open .ticks { display: none; }
-.tick { width: 14px; height: 2px; border-radius: 2px; background: var(--line-2); transition: background .15s; }
-.tick.on { background: var(--accent); width: 20px; }
+.brand {
+  font-family: var(--serif); font-size: 1.02rem; letter-spacing: -.01em;
+  white-space: nowrap;
+}
 
-.thread { display: none; flex-direction: column; padding: 10px 8px; overflow-y: auto; flex: 1; }
-.rail.open .thread { display: flex; }
-.row {
-  display: flex; gap: 10px; align-items: baseline; text-align: left; width: 100%;
-  background: none; border: 0; border-radius: 8px; padding: 9px 10px; color: var(--ink-2);
+.sidebtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; flex: none;
+  background: none; border: 1px solid transparent; border-radius: 9px;
+  color: var(--ink-3); font-size: .95rem; line-height: 1;
 }
-.row:hover { background: var(--surface-2); color: var(--ink); }
-.row.on { background: var(--accent-sf); color: var(--ink); }
-.row.on .n { color: var(--accent); }
-.row .n { font-family: var(--mono); font-size: .68rem; color: var(--ink-3); }
-.row .label {
-  font-size: .82rem; line-height: 1.45;
+.sidebtn:hover { background: var(--surface-2); color: var(--ink); }
+
+.sideact { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 10px; }
+
+/* The one action the whole product turns on, and it says what it does. A
+   session is still created by ASKING — this only clears the middle. */
+.newbtn {
+  display: flex; align-items: center; gap: 10px;
+  background: none; border: 1px solid var(--line-2); border-radius: 10px;
+  padding: 9px 11px; color: var(--ink); font-size: .88rem; white-space: nowrap;
+}
+.newbtn:hover { border-color: var(--accent); color: var(--accent); }
+html[data-side="min"] .newbtn { justify-content: center; padding: 9px 0; }
+.ico { font-size: .95rem; line-height: 1; color: var(--ink-3); flex: none; }
+.newbtn:hover .ico { color: var(--accent); }
+
+/* Search moved off the composer and into here, which is what finally gives the
+   composer one job. It used to filter the library when no session was open —
+   one element meaning two things depending on which screen you were on. */
+.sidesearch {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px;
+  background: var(--bg);
+}
+.sidesearch:focus-within { border-color: var(--accent); }
+.sidesearch input {
+  flex: 1; min-width: 0; background: none; border: 0; outline: none;
+  font: inherit; font-size: .84rem; color: var(--ink);
+}
+.sidesearch input::placeholder { color: var(--ink-3); }
+
+.sessions { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px 10px; scrollbar-width: thin; }
+
+.sgroup {
+  padding: 14px 6px 6px; font-size: .68rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+
+.srow {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  background: none; border: 0; border-radius: 9px; padding: 8px 9px;
+  color: var(--ink-2);
+}
+.srow:hover { background: var(--surface-2); color: var(--ink); }
+.srow.on { background: var(--accent-sf); color: var(--ink); }
+.srow.on .ico { color: var(--accent); }
+html[data-side="min"] .srow { justify-content: center; }
+.slabel {
+  flex: 1; min-width: 0; font-size: .85rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* The rail's map, rehoused. The session you are reading opens to show its
+   sections, so the sidebar answers both questions at once: which site am I in,
+   and where in it. */
+.ssections {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 6px 18px; padding-left: 9px; border-left: 1px solid var(--line-2);
+}
+.ssec {
+  display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left;
+  background: none; border: 0; border-radius: 7px; padding: 6px 8px;
+  color: var(--ink-3);
+}
+.ssec:hover { background: var(--surface-2); color: var(--ink); }
+.ssec.on { color: var(--accent); }
+.ssec .n { font-family: var(--mono); font-size: .64rem; color: var(--ink-3); }
+.ssec .slabel {
+  font-size: .78rem; line-height: 1.4; white-space: normal;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+
+.sempty { margin: 18px 8px; font-size: .82rem; line-height: 1.6; color: var(--ink-3); }
+
+.sidefoot {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px 12px; border-top: 1px solid var(--line);
+}
+.env { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.chip {
+  font-family: var(--mono); font-size: .6rem; color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96px;
+}
+.chip.spent { color: var(--accent); border-color: var(--accent-sf); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-2); }
 
 /* ---------------------------------------------------- the flow and its sections */
 
@@ -299,7 +264,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
    could choose which. Sections now stack in normal flow, in the order they
    were written, and the browser does the rest. */
 .site {
-  position: absolute; inset: 0 0 0 var(--rail);
+  position: absolute; inset: 0 0 0 var(--side);
   overflow-y: auto; overscroll-behavior: contain;
   scroll-behavior: smooth;
   /* Reserving the gutter on BOTH edges keeps the content box concentric with
@@ -312,17 +277,48 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* A section: a plain block. No transform, no frame, no scroller of its own. */
 .panel { position: relative; }
 
-/* The seam between two sections. A hairline at the reading width rather than
-   edge to edge, so it reads as a break in a document rather than a border
-   round a card — the sections are one site, not a stack of tiles. */
-.panel + .panel .doc { border-top: 1px solid var(--line); }
+/* ONE TURN: what was asked, and what got written because of it. */
+.turn { position: relative; }
+
+/* The question, in the reader's own words, standing above the answer it got.
+   These used to live in the rail — a table of contents pretending to be a
+   conversation, where you could see every question and never the answer beside
+   it. They are also what separates one section from the next, which is why the
+   hairline that used to do that job is gone: two separators is one too many. */
+.ask {
+  max-width: var(--page); margin: 0 auto; padding: 2rem var(--gutter) 0;
+  display: flex; justify-content: flex-end;
+}
+.ask p {
+  margin: 0; max-width: 80%;
+  background: var(--surface-2); border-radius: 16px 16px 4px 16px;
+  padding: 10px 16px;
+  font-size: .95rem; line-height: 1.55; color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* Asked, and not yet answered. The dot is the only thing on screen saying the
+   question went somewhere until the first block lands. */
+.turn.pending .ask p::after {
+  content: "…"; color: var(--ink-3); margin-left: 4px;
+}
+/* Asked, and nothing came of it. Kept, because a question that failed is still
+   part of the record of what was asked — the retry is on the composer. */
+.turn.unanswered .ask p { border: 1px dashed var(--warn); color: var(--ink-2); }
+.turn.unanswered .ask::after {
+  content: "no answer was written"; align-self: center; margin-left: 10px;
+  font-size: .72rem; color: var(--warn);
+}
+.turn.unanswered .ask { padding-bottom: 2rem; }
 
 /* Room for the composer at the foot of the site, and only there. Every page
    used to end with a `.dock` reserving 26vh — a quarter of the screen, on
    every page, for one composer that can only be in one place. Constant
    regardless of the composer's current size, so growing it cannot change what
    "at the bottom" means and start an oscillation. */
-.site .panel:last-child .doc { padding-bottom: 9rem; }
+/* THE LAST TURN, not the last panel. Every `.panel` is now the last child of
+   its `.turn`, so `.panel:last-child` matched all of them and put a
+   composer's worth of empty space under every section in the site. */
+.site > .turn:last-child .doc { padding-bottom: 9rem; }
 
 /* `.doc` sets the base size and everything inside it is `em`, so one dial
    moves the whole document and nothing outside it. */
@@ -333,11 +329,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
    page look composed rather than dumped, and it costs prose nothing. */
 .doc {
   max-width: var(--page);
-  margin: 0 auto; padding: 3.4rem var(--gutter);
+  margin: 0 auto; padding: 1.6rem var(--gutter) 1.8rem;
   font-size: calc(1rem * var(--type));
 }
-/* The top of the site gets the air a first page had; the sections after it are
-   separated by the seam above instead. */
+/* A section with no question above it — the first one of an older session, or
+   one the agent wrote without being asked — still needs air above it. */
 .panel:first-child .doc { padding-top: 7vh; }
 
 /* Nothing is capped and nothing is centred inside the page any more: every
@@ -497,6 +493,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   :root { --gutter: 20px; }
   .split { grid-template-columns: 1fr; }
   .panel:first-child .doc { padding-top: 5vh; }
+  .ask { padding-top: 1.8rem; }
+  .ask p { max-width: 100%; }
   .doc h1 { font-size: 1.5em; }
 }
 
@@ -509,7 +507,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
    space and blurred whatever was focused each time it moved. */
 
 .floathost {
-  position: absolute; left: var(--rail); right: 0; bottom: 0; z-index: 28;
+  position: absolute; left: var(--side); right: 0; bottom: 0; z-index: 28;
   display: flex; justify-content: center; padding: 0 var(--gutter) 26px;
   pointer-events: none;
 }
@@ -761,7 +759,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .chipbtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 
 .prefs {
-  position: absolute; bottom: 14px; left: calc(var(--rail-open) + 12px); z-index: 40;
+  position: absolute; bottom: 14px; left: calc(var(--side) + 12px); z-index: 40;
   display: flex; flex-direction: column; gap: 12px;
   background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px;
   padding: 14px; min-width: 250px;
@@ -922,10 +920,31 @@ button { font: inherit; color: inherit; cursor: pointer; }
    something" is an instruction rather than an explanation — so this explains,
    and then offers three real questions, because the fastest way to describe a
    thing that answers questions with a website is to answer one. */
-.firstrun { grid-column: 1 / -1; max-width: 46rem; }
-.firstrun p {
-  margin: 0 0 18px; font-size: 1.05rem; line-height: 1.7; color: var(--ink-2);
+/* NOTHING OPEN. There is no library to go back to, so this is what an empty
+   middle looks like: the greeting, the composer under it, and three real
+   questions. The composer centres itself here rather than sitting at the foot
+   of a site that does not exist yet. */
+.firstrun {
+  max-width: 46rem; margin: 0 auto;
+  padding: 21vh var(--gutter) 20vh;
+  text-align: center;
 }
+.firstrun h1 {
+  font-family: var(--serif); font-weight: 500; font-size: 2.1rem;
+  letter-spacing: -.02em; margin: 0 0 14px;
+}
+.firstrun p {
+  margin: 0 auto; max-width: 34rem;
+  font-size: 1.02rem; line-height: 1.7; color: var(--ink-2);
+}
+/* The gap the composer sits in. It floats over this column rather than living
+   in it — there is one composer and one home — so the empty state leaves it
+   room instead of flowing around it. */
+.tryrow { justify-content: center; margin-top: 172px; }
+
+/* Centred, because there is no site under it to be the foot of. */
+.app[data-empty="1"] .floathost { top: 50%; bottom: auto; transform: translateY(-50%); }
+.app[data-empty="1"] .floathost::before { display: none; }
 .tryrow { display: flex; flex-wrap: wrap; gap: 9px; }
 .try {
   background: var(--surface); border: 1px solid var(--line); border-radius: 999px;

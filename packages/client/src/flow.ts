@@ -39,10 +39,36 @@ export class Flow {
   /** Fires on every scroll, settled or not — the composer sizes itself from it. */
   onScroll: () => void = () => {};
 
+  /**
+   * The site changing height without anyone scrolling.
+   *
+   * A figure finishing its layout, a webfont landing, a block arriving — each
+   * makes the scroll taller, and "is the reader at the end of it?" was only
+   * ever re-asked on a scroll event. So the composer could sit full-size at a
+   * foot that had moved a screen further down, and `atend` styling stayed on a
+   * site that was no longer at its end.
+   */
+  private grew: ResizeObserver | undefined;
+  /**
+   * Was the reader at the foot of the site when it last moved?
+   *
+   * If they were, they stay there when it grows — the same rule a terminal or
+   * a chat uses. If they had scrolled up to read something, nothing moves
+   * them: growth below where you are reading is not a reason to be taken
+   * somewhere else.
+   */
+  private pinned = true;
+
   constructor(host: HTMLElement) {
     this.host = host;
     host.addEventListener("scroll", () => this.onHostScroll(), { passive: true });
     window.addEventListener("keydown", (e) => this.onKey(e));
+    if (typeof ResizeObserver !== "undefined") {
+      this.grew = new ResizeObserver(() => {
+        if (this.pinned) this.host.scrollTo({ top: this.host.scrollHeight, behavior: "instant" });
+        this.onScroll();
+      });
+    }
   }
 
   get index() { return this.current; }
@@ -63,18 +89,21 @@ export class Flow {
   clear() {
     this.sections = [];
     this.current = 0;
+    this.grew?.disconnect();
     this.host.replaceChildren();
   }
 
   add(section: FlowSection) {
     this.sections.push(section);
     this.host.append(section.root);
+    this.grew?.observe(section.root);
     if (this.sections.length === 1) this.announce();
   }
 
   remove(id: string) {
     const i = this.sections.findIndex((s) => s.id === id);
     if (i === -1) return;
+    this.grew?.unobserve(this.sections[i]!.root);
     this.sections[i]!.root.remove();
     this.sections.splice(i, 1);
     this.current = Math.min(this.current, Math.max(0, this.sections.length - 1));
@@ -99,6 +128,8 @@ export class Flow {
     const section = this.sections[next];
     if (!section) return;
     this.current = next;
+    // Going somewhere specific is the opposite of following the foot.
+    this.pinned = false;
     this.host.scrollTo({
       top: section.root.offsetTop,
       behavior: opts.animate === false ? "instant" : "smooth",
@@ -117,6 +148,7 @@ export class Flow {
 
   /** Straight to the foot of the site — where a new section has just landed. */
   toEnd(opts: { animate?: boolean } = {}) {
+    this.pinned = true;
     this.host.scrollTo({
       top: this.host.scrollHeight,
       behavior: opts.animate === false ? "instant" : "smooth",
@@ -143,6 +175,7 @@ export class Flow {
   }
 
   private onHostScroll() {
+    this.pinned = this.atEnd;
     this.onScroll();
     if (this.jumping) return;
     const i = this.sectionAtMiddle();

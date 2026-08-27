@@ -16,69 +16,52 @@
     var t = { small: ".92", normal: "1", large: "1.12", larger: "1.26" }[s.type];
     if (t) document.documentElement.style.setProperty("--type", t);
     if (s.measure === "wide") document.documentElement.style.setProperty("--page-base", "64rem");
+    // The sidebar's width, before the module loads: a wide sidebar snapping
+    // shut a frame later is the same flash the theme guard above prevents.
+    if (s.sidebar === "min") document.documentElement.dataset.side = "min";
   } catch (e) {}
 </script>
 </head>
 <body>
 
-<!-- ALTITUDE 1 — the library. Sessions, nothing else. -->
-<section class="view lib" id="library">
-  <div class="lib-inner">
-    <header class="lib-head">
-      <h1>Perpetual</h1>
-      <p class="sub">One session is one website. Ask, and it gets written.</p>
-    </header>
+<!--
+  ONE PAGE. There used to be two — a library you travelled to and a session you
+  travelled into — and the composer was physically re-parented between them.
+  Everything is here at once now: the sidebar holds every session and the way
+  to start another, and the middle holds whichever one you are reading.
+-->
+<div class="app" id="app">
 
-    <!-- Where the composer lives on this view. Typing here starts a session;
-         there is no "New session" button because typing IS creating one. -->
-    <div class="libhost" id="libhost"></div>
-    <div class="matchline" id="matchline"></div>
-
-    <div class="grid" id="grid"></div>
-  </div>
-</section>
-
-<!-- What the product can do without the mouse. Nothing surfaced this before,
-     so ⌘K, / and PageUp/PageDown were features only the source knew about. -->
-<div class="keys" id="keys" hidden>
-  <h2>Keyboard</h2>
-  <dl>
-    <dt>⌘K</dt><dd>ask something</dd>
-    <dt>/</dt><dd>ask something</dd>
-    <dt>Esc</dt><dd>stop pointing at a block, then close</dd>
-    <dt>PageUp / PageDown</dt><dd>move between sections</dd>
-    <dt>?</dt><dd>this list</dd>
-  </dl>
-  <button class="railbtn" id="keysclose" type="button">Close</button>
-</div>
-
-<!-- ALTITUDE 2 — a session. Fixed chrome; the flow in the middle is the
-     agent's: one continuous scroll, made of the sections it writes. -->
-<section class="view sess" id="session" hidden>
-  <!-- No horizontal bar. On a laptop the scarce dimension is height and the
-       abundant one is width, so the chrome lives in the rail — which was
-       already a vertical strip, already 46px, and already mostly empty.
-       Identity at the top, navigation in the middle, environment at the
-       foot. -->
-  <aside class="rail" id="rail" tabindex="-1">
-    <div class="railtop">
-      <button class="railbtn" id="back" type="button" aria-label="Back to the library">←</button>
-      <span class="stitle wide" id="stitle"></span>
-      <!-- Opening the rail is a decision. It used to happen on hover, which
-           meant brushing the left edge covered a quarter of the page you were
-           reading with a panel you had not asked for. -->
-      <button class="railbtn railtoggle" id="railtoggle" type="button"
-              aria-expanded="false" aria-label="Show the pages in this session">☰</button>
+  <!-- The sidebar does the navigating. It replaces the rail (which had to
+       carry identity, navigation and the environment in 46px) and the library
+       view (which was a whole screen you had to leave the work to reach). -->
+  <aside class="side" id="side">
+    <div class="sidehead">
+      <button class="sidebtn" id="sidetoggle" type="button"
+              aria-expanded="true" aria-label="Collapse the sidebar">▤</button>
+      <span class="brand wide">Perpetual</span>
     </div>
 
-    <div class="railmid" id="railmid"></div>
+    <div class="sideact">
+      <button class="newbtn" id="newsession" type="button">
+        <span class="ico">✎</span><span class="wide">New session</span>
+      </button>
+      <div class="sidesearch wide">
+        <span class="ico">⌕</span>
+        <input id="sidesearch" type="text" placeholder="Search sessions"
+               autocomplete="off" aria-label="Search sessions">
+      </div>
+      <button class="sidebtn narrow" id="searchmin" type="button"
+              aria-label="Search sessions">⌕</button>
+    </div>
 
-    <div class="railfoot">
-      <button class="railbtn" id="prefsbtn" type="button"
+    <nav class="sessions" id="sessions" aria-label="Sessions"></nav>
+
+    <div class="sidefoot">
+      <button class="sidebtn" id="prefsbtn" type="button"
               aria-expanded="false" aria-label="Settings">⚙</button>
       <span class="dot narrow" id="modedot"></span>
-      <!-- The environment, where the environment already lives. The model
-           belongs here rather than on the composer: it is a fact about the
+      <!-- The environment, kept where the chrome lives. It is a fact about the
            session, and the composer is already carrying the aim, the status
            and the turn. -->
       <div class="env wide">
@@ -90,10 +73,14 @@
     </div>
   </aside>
 
+  <!-- The site: one continuous scroll of what the agent wrote, with your own
+       questions standing between the sections as the record of what was
+       asked. -->
   <main class="site" id="site"></main>
 
   <!-- Reader settings. Chrome, never the canvas: the agent cannot see or
-       reach any of this. Anchored beside the rail's foot, where its button is. -->
+       reach any of this. Anchored beside the sidebar's foot, where its
+       button is. -->
   <div class="prefs" id="prefs" hidden>
     <div class="pgroup">Appearance</div>
     <div class="prow">
@@ -123,45 +110,60 @@
     </div>
   </div>
 
-  <!-- The composer's one home. It is short while there is still site to read
-       and grows at the foot of it — a size, not a second element. -->
-  <div class="floathost" id="floathost"></div>
-
-</section>
-
-  <div class="pill" id="pill" data-state="idle">
-    <!-- What the question points at, and the way to stop pointing at it. -->
-    <div class="aim" hidden>
-      <span class="aimtext"></span>
-      <button class="aimoff" type="button" aria-label="Ask about the page instead">×</button>
-    </div>
-
-    <!-- Always a field, never a button that hides one. It is SHORT when there
-         is nothing to say to it and grows when there is — but a reader must
-         always be able to see the place where they type. -->
-    <form class="pform">
-      <input type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Ask">
-      <span class="pos"></span>
-      <span class="enter">↵</span>
-    </form>
-
-    <div class="work">
-      <!-- What is happening, in words. The command that produced it is one
-           click away rather than in the reader's face: hidden by default,
-           never deleted, because when something fails it is the only thing
-           that explains it. -->
-      <span class="verb"></span>
-      <button class="rawbtn" type="button" aria-expanded="false"
-              aria-label="Show the command being run">⋯</button>
-      <button class="stop" type="button" aria-label="Stop this turn">■</button>
-      <div class="raw" hidden>
-        <code class="cmd"></code>
-        <pre class="out"></pre>
+  <!-- The composer's one home, and now its only one: with a single view there
+       is nothing to re-parent it between. It is short while there is still
+       site to read and grows at the foot of it. -->
+  <div class="floathost" id="floathost">
+    <div class="pill" id="pill" data-state="idle">
+      <!-- What the question points at, and the way to stop pointing at it. -->
+      <div class="aim" hidden>
+        <span class="aimtext"></span>
+        <button class="aimoff" type="button" aria-label="Ask about the page instead">×</button>
       </div>
-    </div>
 
-    <div class="pstatus"></div>
+      <!-- Always a field, never a button that hides one. It is SHORT when
+           there is nothing to say to it and grows when there is — but a reader
+           must always be able to see the place where they type. -->
+      <form class="pform">
+        <input type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Ask">
+        <span class="enter">↵</span>
+      </form>
+
+      <div class="work">
+        <!-- What is happening, in words. The command that produced it is one
+             click away rather than in the reader's face: hidden by default,
+             never deleted, because when something fails it is the only thing
+             that explains it. -->
+        <span class="verb"></span>
+        <button class="rawbtn" type="button" aria-expanded="false"
+                aria-label="Show the command being run">⋯</button>
+        <button class="stop" type="button" aria-label="Stop this turn">■</button>
+        <div class="raw" hidden>
+          <code class="cmd"></code>
+          <pre class="out"></pre>
+        </div>
+      </div>
+
+      <div class="pstatus"></div>
+    </div>
   </div>
+
+  <!-- What the product can do without the mouse. Nothing surfaced this before,
+       so ⌘K, / and PageUp/PageDown were features only the source knew about. -->
+  <div class="keys" id="keys" hidden>
+    <h2>Keyboard</h2>
+    <dl>
+      <dt>⌘K</dt><dd>ask something</dd>
+      <dt>/</dt><dd>ask something</dd>
+      <dt>⌘B</dt><dd>show or hide the sidebar</dd>
+      <dt>Esc</dt><dd>stop pointing at a block, then close</dd>
+      <dt>PageUp / PageDown</dt><dd>move between sections</dd>
+      <dt>?</dt><dd>this list</dd>
+    </dl>
+    <button class="sidebtn" id="keysclose" type="button">Close</button>
+  </div>
+
+</div>
 
 <script type="module" src="/dist/main.js"></script>
 </body>
