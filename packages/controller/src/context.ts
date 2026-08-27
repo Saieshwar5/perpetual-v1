@@ -77,6 +77,15 @@ function describeBlockShape(b: Block): string {
       return `the questions this page leaves open`;
     case "choice":
       return `the choice "${b.prompt}"`;
+    case "rows":
+      return `a list of ${b.items.length}: ${b.items.slice(0, 3)
+        .map((i) => `"${i.title}"`).join(", ")}${b.items.length > 3 ? ", …" : ""}`;
+    case "fields":
+      return `the details ${b.items.slice(0, 3).map((f) => f.label).join(", ")}`;
+    case "form":
+      return `the form \`${b.id}\` (${b.fields.map((f) => f.id).join(", ")})`;
+    case "confirm":
+      return `the confirmation "${b.prompt}"`;
   }
 }
 

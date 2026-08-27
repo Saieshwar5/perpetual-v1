@@ -48,23 +48,40 @@ function workspacePlan(ask: string, num: string): { say: string; command: string
       // file, so a row is a command rather than a program.
       command: `mkdir -p ui/apps/files && cat > ui/apps/files/show <<'SH'
 #!/bin/bash
-# usage: show <path>  |  show --list
+# usage: show --list | show <path> | show --rename <path>
 cd "$(dirname "$0")/../../.." || exit 1
-if [ "$1" = "--list" ]; then
+list() {
   cat > ui/apps/files/meta.json <<'M'
 {"title":"Files","view":"3 matches"}
 M
   cat > ui/apps/files/view.ndjson <<'V'
-{"kind":"choice","id":"matches","prompt":"Three files mention margins. Which one?","options":[{"id":"q3","label":"q3-margins.csv","hint":"workspace/reports · 4.2 KB · Tuesday","run":"ui/apps/files/show workspace/reports/q3-margins.csv"},{"id":"deck","label":"board-deck.md","hint":"workspace/notes · 18 KB · last month","run":"ui/apps/files/show workspace/notes/board-deck.md"},{"id":"q2","label":"q2-margins.csv","hint":"workspace/reports · 3.9 KB · April","run":"ui/apps/files/show workspace/reports/q2-margins.csv"}]}
+{"kind":"rows","id":"matches","items":[{"id":"q3","title":"q3-margins.csv","meta":"workspace/reports · 4.2 KB · Tuesday","note":"margins held at 38% through the cost rise","state":"unread","run":"ui/apps/files/show workspace/reports/q3-margins.csv","actions":[{"id":"rename","label":"Rename","run":"ui/apps/files/show --rename workspace/reports/q3-margins.csv"}]},{"id":"deck","title":"board-deck.md","meta":"workspace/notes · 18 KB · last month","note":"the board deck","run":"ui/apps/files/show workspace/notes/board-deck.md"},{"id":"q2","title":"q2-margins.csv","meta":"workspace/reports · 3.9 KB · April","note":"older numbers","state":"done","run":"ui/apps/files/show workspace/reports/q2-margins.csv"}]}
 V
+}
+if [ "$1" = "--list" ]; then list; exit 0; fi
+if [ "$1" = "--rename" ]; then
+  f="$2"
+  if [ -n "$FIELD_NAME" ]; then
+    mv "$f" "$(dirname "$f")/$FIELD_NAME" && list
+    exit 0
+  fi
+  cat > ui/apps/files/meta.json <<M
+{"title":"Files","view":"rename"}
+M
+  {
+    printf '{"kind":"heading","text":"Rename this file"}\\n'
+    printf '{"kind":"fields","items":[{"label":"Path","value":"%s"},{"label":"Size","value":"%s bytes"}]}\\n' "$f" "$(wc -c < "$f" | tr -d ' ')"
+    printf '{"kind":"form","id":"rename","submit":"Rename","run":"ui/apps/files/show --rename %s","fields":[{"id":"name","label":"New name","type":"text","value":"%s","required":true}]}\\n' "$f" "\${f##*/}"
+    printf '{"kind":"confirm","id":"drop","prompt":"Delete this file instead?","detail":"%s · this cannot be undone","confirm":"Delete","cancel":"Keep it","run":"rm -f %s && ui/apps/files/show --list"}\\n' "$f" "$f"
+  } > ui/apps/files/view.ndjson
   exit 0
 fi
 f="$1"
 {
-  printf '{"kind":"heading","text":%s}\n' "$(printf '%s' "\${f##*/}" | sed 's/.*/"&"/')"
-  printf '{"kind":"note","text":"%s · %s bytes","tone":"info"}\n' "$f" "$(wc -c < "$f" | tr -d ' ')"
-  printf '{"kind":"code","text":%s,"lang":"text"}\n' "$(head -c 300 "$f" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
-  printf '{"kind":"choice","id":"actions","prompt":"What next?","options":[{"id":"back","label":"Back to the matches","hint":"the three files","run":"ui/apps/files/show --list"},{"id":"explain","label":"Explain what this file is"}]}\n'
+  printf '{"kind":"heading","text":"%s"}\\n' "\${f##*/}"
+  printf '{"kind":"fields","items":[{"label":"Path","value":"%s"},{"label":"Size","value":"%s bytes"}]}\\n' "$f" "$(wc -c < "$f" | tr -d ' ')"
+  printf '{"kind":"code","text":%s,"lang":"text"}\\n' "$(head -c 300 "$f" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
+  printf '{"kind":"rows","id":"actions","items":[{"id":"back","title":"Back to the matches","meta":"the three files","run":"ui/apps/files/show --list"},{"id":"explain","title":"Explain what this file is","meta":"asks the agent — this one needs judgement"}]}\\n'
 } > ui/apps/files/view.ndjson
 cat > ui/apps/files/meta.json <<M
 {"title":"Files","view":"\${f##*/}"}

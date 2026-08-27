@@ -39,6 +39,11 @@ const MARK_RE = /\u0001([^\u0001]*)\u0001\s*$/;
 export interface ShellRequest {
   command: string;
   timeoutSec?: number;
+  /**
+   * Extra environment for this one run. How a workspace form's values reach
+   * the command it submits to — as variables, never as text inside it.
+   */
+  env?: Record<string, string>;
   /** Where to run, in sandbox coordinates. Defaults to the last known cwd. */
   cwd?: string;
   signal?: AbortSignal;
@@ -88,7 +93,7 @@ export function createShell(cfg: SandboxConfig) {
     const timeoutSec = Math.min(Math.max(1, req.timeoutSec ?? DEFAULT_TIMEOUT_SEC), MAX_TIMEOUT_SEC);
     const acc = new OutputAccumulator();
     const { file, args } = wrapCommand(
-      script(req.command, req.cwd ?? cwd, home, ulimits(cfg)), cfg,
+      script(req.command, req.cwd ?? cwd, home, ulimits(cfg)), cfg, req.env ?? {},
     );
 
     const child = spawn(file, args, {
@@ -97,11 +102,14 @@ export function createShell(cfg: SandboxConfig) {
       // Only bwrap sees this — except in unsafe mode, where there is no bwrap
       // and this IS the command's environment, so the agent's own programs
       // have to be reachable here too.
+      // Unsafe mode has no bwrap, so THIS is the command's environment and the
+      // per-run values have to be merged here instead.
       env: cfg.unsafe
         ? {
             PATH: `${toolsDir()}:${process.env.PATH ?? "/usr/bin:/bin"}`,
             HOME: cfg.root,
             PERPETUAL_SITE: cfg.root,
+            ...(req.env ?? {}),
           }
         : { PATH: process.env.PATH ?? "/usr/bin:/bin" },
     });

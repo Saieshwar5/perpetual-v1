@@ -169,15 +169,71 @@ export async function readApps(siteDir: string, cache?: AppCache): Promise<{
  * sandbox, which would turn a click into a shell.
  */
 export function commandFor(app: AppView, block: string, option: string): {
-  run: string; label: string;
+  run: string; label: string; fields?: string[];
 } | null {
   for (const b of app.blocks) {
-    if (b.kind !== "choice" || b.id !== block) continue;
-    const o = b.options.find((x) => x.id === option);
-    if (!o?.run) return null;
-    return { run: o.run, label: o.label };
+    if (b.id !== block) continue;
+
+    if (b.kind === "choice") {
+      const o = b.options.find((x) => x.id === option);
+      return o?.run ? { run: o.run, label: o.label } : null;
+    }
+
+    if (b.kind === "rows") {
+      // A row's own command, or one of the actions beside it. `item.action` —
+      // a dot, which an id may not contain, so the two can never be confused.
+      const [rowId, actionId] = option.split(".");
+      const row = b.items.find((x) => x.id === rowId);
+      if (!row) return null;
+      if (actionId == null) return row.run ? { run: row.run, label: row.title } : null;
+      const a = row.actions?.find((x) => x.id === actionId);
+      return a?.run ? { run: a.run, label: `${a.label} — ${row.title}` } : null;
+    }
+
+    if (b.kind === "form") {
+      // The names the values are allowed to arrive under. Anything else the
+      // client sends is dropped: a form defines its own fields, and a posted
+      // key that is not one of them is not a field, it is an attempt.
+      return b.run
+        ? { run: b.run, label: b.submit ?? "Submit", fields: b.fields.map((f) => f.id) }
+        : null;
+    }
+
+    if (b.kind === "confirm") {
+      // Only the yes. There is nothing to run for a no — the view simply stays.
+      return option === "confirm" && b.run
+        ? { run: b.run, label: b.confirm ?? "Confirm" }
+        : null;
+    }
   }
   return null;
+}
+
+/**
+ * A form's values, on their way to a command — as ENVIRONMENT, never as text.
+ *
+ * This is the one genuinely new risk the quartet introduces. A row's command
+ * is written by the agent and carries exactly the agent's own authority, which
+ * is nothing new. A form's values are written by the READER, and a value
+ * spliced into a shell string would make a text field into a shell: one
+ * `; rm -rf` in a subject line and the workspace is a terminal.
+ *
+ * So values never touch the command. They arrive as `FIELD_<ID>`, the command
+ * reads them like any environment variable, and the worst a hostile value can
+ * do is be a strange string inside one.
+ */
+export function fieldEnv(
+  values: Record<string, unknown> | undefined, allowed: string[],
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (!values) return env;
+  for (const id of allowed) {
+    const v = values[id];
+    if (v == null) continue;
+    env[`FIELD_${id.replace(/-/g, "_").toUpperCase()}`] =
+      typeof v === "boolean" ? (v ? "1" : "") : String(v).slice(0, 8000);
+  }
+  return env;
 }
 
 /**

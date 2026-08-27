@@ -803,6 +803,101 @@ html[data-side="min"] .srow { justify-content: center; }
   .app[data-panel="1"] .floathost { right: 0; }
 }
 
+/* ===================================================== the app quartet */
+
+/* A list you scan, not a question you answer. Rows are full width and stack,
+   because the list IS the interface here — you read down it the way you read
+   an inbox, and the row itself is the thing you click. */
+.rows { display: flex; flex-direction: column; gap: 4px; }
+
+.row {
+  display: flex; align-items: stretch; gap: 4px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  transition: border-color .13s, background .13s;
+}
+.row:hover { border-color: var(--accent); background: var(--accent-sf); }
+
+.rowmain {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+  text-align: left; background: none; border: 0; border-radius: 10px;
+  padding: 10px 12px; color: var(--ink);
+}
+.rowtitle { font-size: .92em; line-height: 1.35; }
+.rowmeta, .rownote {
+  font-size: .74em; color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rowmeta { font-family: var(--mono); }
+
+/* Three states and no more, so a state means the same thing in every app. */
+.row.is-unread .rowtitle { font-weight: 600; color: var(--ink); }
+.row.is-unread { border-left: 2px solid var(--accent); }
+.row.is-done .rowtitle { color: var(--ink-3); }
+.row.is-warn { border-left: 2px solid var(--warn); }
+
+/* Secondary, and it looks it: the row is the action, these are beside it. */
+.rowacts { display: flex; align-items: center; gap: 4px; padding-right: 6px; }
+.rowact {
+  background: none; border: 1px solid transparent; border-radius: 7px;
+  padding: 5px 9px; font-size: .74rem; color: var(--ink-3);
+}
+.rowact:hover { border-color: var(--line-2); color: var(--ink); background: var(--surface); }
+
+/* The header every detail view opens with: metadata, not data. */
+.fields {
+  display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+  margin: 0; font-size: .86em;
+}
+.fields dt { color: var(--ink-3); white-space: nowrap; }
+.fields dd { margin: 0; overflow-wrap: anywhere; }
+
+/* The block that turns a workspace from something you read into something you
+   use. Its values reach the command as environment variables — see apps.ts. */
+.appform { display: flex; flex-direction: column; gap: 10px; }
+.frow { display: flex; flex-direction: column; gap: 5px; }
+.flabel { font-size: .76rem; color: var(--ink-3); }
+.appform input, .appform textarea, .appform select {
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 9px;
+  padding: 8px 11px; font: inherit; font-size: .86rem; color: var(--ink);
+  outline: none; width: 100%;
+}
+.appform input:focus, .appform textarea:focus, .appform select:focus {
+  border-color: var(--accent);
+}
+.appform textarea { resize: vertical; line-height: 1.5; }
+.appform input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+.frow:has(input[type="checkbox"]) { flex-direction: row-reverse; justify-content: flex-end;
+  align-items: center; gap: 8px; }
+.fsubmit {
+  align-self: flex-start;
+  background: var(--accent); border: 0; border-radius: 9px;
+  padding: 8px 16px; font-size: .84rem; color: var(--accent-in);
+}
+.fsubmit:hover { filter: brightness(1.08); }
+
+/* The gate. The dangerous button is never the default, and `detail` says
+   exactly what is about to happen — the difference between consent and a habit
+   of saying yes. */
+.confirm {
+  border: 1px solid var(--warn); border-radius: 11px;
+  background: var(--warn-sf); padding: 14px;
+}
+.confirm .cprompt { margin: 0 0 6px; font-size: .95em; }
+.confirm .cdetail {
+  margin: 0 0 12px; font-family: var(--mono); font-size: .74em; color: var(--ink-2);
+}
+.cacts { display: flex; gap: 8px; }
+.cno {
+  background: none; border: 1px solid var(--line-2); border-radius: 9px;
+  padding: 7px 14px; font-size: .82rem; color: var(--ink-2);
+}
+.cno:hover { border-color: var(--ink-3); color: var(--ink); }
+.cyes {
+  background: var(--warn); border: 0; border-radius: 9px;
+  padding: 7px 14px; font-size: .82rem; color: var(--bg);
+}
+.cyes:hover { filter: brightness(1.08); }
+
 /* ----------------------------------------------------------- revisions */
 
 /* The agent cannot unwrite what it published, so a correction is a new block
