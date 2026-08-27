@@ -17,7 +17,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Block } from "@perpetual/shared/blocks";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
-import type { Anchor, Selection, Site } from "@perpetual/shared/site";
+import type { Anchor, AppView, Selection, Site } from "@perpetual/shared/site";
 
 const PROMPTS = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
 
@@ -94,6 +94,26 @@ function describeBlockShape(b: Block): string {
  * the failure mode this replaces.
  */
 function describeSelection(sel: Selection): string {
+  // A pick in a WORKSPACE is a different thing from a pick on a page. A page
+  // is a record and the answer to a choice on it is the next section; a
+  // workspace is a surface being worked in, and the answer is usually a new
+  // view. Saying which is what stops the agent writing a section every time
+  // somebody clicks a row in a list.
+  if (sel.app && sel.control === "typed") {
+    return `\nThey typed that in the **${sel.app}** workspace, not on the site. It is ` +
+      "about the work in front of them: do it, and rewrite " +
+      `\`ui/apps/${sel.app}/view.ndjson\` to show where it got them. A section is for ` +
+      "something worth keeping after the workspace closes.";
+  }
+  if (sel.app) {
+    return `\nThe user did not type this — they picked \`${sel.option}\` (${sel.label}) ` +
+      `in the **${sel.app}** workspace` +
+      (sel.prompt ? `, which asked "${sel.prompt}"` : "") +
+      ". They are working, not reading: do the thing they picked and rewrite " +
+      `\`ui/apps/${sel.app}/view.ndjson\` to show where that got them. Only write a ` +
+      "section if the work produced something worth keeping after the workspace " +
+      "closes.";
+  }
   if (sel.control === "next") {
     return `\nThe user did not type this — they took a door on **${sel.page}**: ` +
       `"${sel.option}". That is a fork: they are asking for a page that does not ` +
@@ -159,6 +179,7 @@ function describeEngagement(
 export function turnMessage(
   opts: {
     ask: string; site: Site; pastAsks: string[];
+    apps?: AppView[];
     anchor?: Anchor; selection?: Selection;
     answered?: Record<string, string>; chosen?: Record<string, string>;
   },
@@ -174,6 +195,20 @@ export function turnMessage(
     const n = String(opts.site.pages.length + 1).padStart(3, "0");
     parts.push(`This session's site has ${opts.site.pages.length} page(s):\n${inventory}\n`);
     parts.push(`A new page would be \`${n}-<slug>\`.`);
+  }
+
+  if (opts.apps?.length) {
+    const list = opts.apps.map((a) => {
+      const rows = a.blocks.filter((b) => b.kind === "choice").length;
+      return `  ${a.id}  "${a.title}"${a.view ? ` · ${a.view}` : ""}  (${
+        a.blocks.length} block(s)${rows ? `, ${rows} pickable` : ""})`;
+    }).join("\n");
+    parts.push(
+      `\nWorkspaces open beside the site:\n${list}\n` +
+      "A workspace is a surface to work IN, not a record: rewrite " +
+      "`ui/apps/<id>/view.ndjson` whenever the work moves on, and remove the " +
+      "directory when it is finished with.",
+    );
   }
 
   if (opts.pastAsks.length) {

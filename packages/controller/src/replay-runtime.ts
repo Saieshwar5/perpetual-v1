@@ -20,7 +20,74 @@ function slugify(s: string): string {
     || "answer";
 }
 
+/**
+ * The workspace script, for an ask that wants a surface rather than a page.
+ *
+ * Same job as the page script below: an executable copy of what rules.md
+ * teaches, so a rule that stops working shows up here before it shows up in a
+ * session. It also makes the whole workspace path — the second watcher, the
+ * panel, the run-a-row endpoint — testable with no model and no credentials.
+ */
+function workspacePlan(ask: string, num: string): { say: string; command: string }[] {
+  const id = `${num}-${slugify(ask)}`;
+  const dir = `ui/pages/${id}`;
+  const meta = JSON.stringify({ title: "Files", ask });
+
+  return [
+    {
+      say: "Looking for what matches.",
+      command: "mkdir -p workspace/notes workspace/reports && "
+        + "printf 'margins held\n' > workspace/reports/q3-margins.csv && "
+        + "printf 'the board deck\n' > workspace/notes/board-deck.md && "
+        + "printf 'older numbers\n' > workspace/reports/q2-margins.csv && "
+        + "find workspace -name '*margin*' -o -name '*deck*' | head",
+    },
+    {
+      say: "Opening a workspace for them.",
+      // The script every row points at: one place that knows how to draw a
+      // file, so a row is a command rather than a program.
+      command: `mkdir -p ui/apps/files && cat > ui/apps/files/show <<'SH'
+#!/bin/bash
+# usage: show <path>  |  show --list
+cd "$(dirname "$0")/../../.." || exit 1
+if [ "$1" = "--list" ]; then
+  cat > ui/apps/files/meta.json <<'M'
+{"title":"Files","view":"3 matches"}
+M
+  cat > ui/apps/files/view.ndjson <<'V'
+{"kind":"choice","id":"matches","prompt":"Three files mention margins. Which one?","options":[{"id":"q3","label":"q3-margins.csv","hint":"workspace/reports · 4.2 KB · Tuesday","run":"ui/apps/files/show workspace/reports/q3-margins.csv"},{"id":"deck","label":"board-deck.md","hint":"workspace/notes · 18 KB · last month","run":"ui/apps/files/show workspace/notes/board-deck.md"},{"id":"q2","label":"q2-margins.csv","hint":"workspace/reports · 3.9 KB · April","run":"ui/apps/files/show workspace/reports/q2-margins.csv"}]}
+V
+  exit 0
+fi
+f="$1"
+{
+  printf '{"kind":"heading","text":%s}\n' "$(printf '%s' "\${f##*/}" | sed 's/.*/"&"/')"
+  printf '{"kind":"note","text":"%s · %s bytes","tone":"info"}\n' "$f" "$(wc -c < "$f" | tr -d ' ')"
+  printf '{"kind":"code","text":%s,"lang":"text"}\n' "$(head -c 300 "$f" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"
+  printf '{"kind":"choice","id":"actions","prompt":"What next?","options":[{"id":"back","label":"Back to the matches","hint":"the three files","run":"ui/apps/files/show --list"},{"id":"explain","label":"Explain what this file is"}]}\n'
+} > ui/apps/files/view.ndjson
+cat > ui/apps/files/meta.json <<M
+{"title":"Files","view":"\${f##*/}"}
+M
+SH
+chmod +x ui/apps/files/show && ui/apps/files/show --list && echo opened`,
+    },
+    {
+      say: "Saying what I found.",
+      command: `mkdir -p ${dir} && cat > ${dir}/meta.json <<'META'
+${meta}
+META
+cat >> ${dir}/page.ndjson <<'NDJ'
+{"kind":"heading","text":"Three files mention margins"}
+{"kind":"prose","text":"They are open in the workspace beside this. Pick one to read it — that costs nothing, because the row carries the command that opens it. Ask me about one when you want an opinion rather than the contents."}
+NDJ
+echo wrote`,
+    },
+  ];
+}
+
 function plan(ask: string, num: string): { say: string; command: string }[] {
+  if (/\bfile|files|find\b/i.test(ask)) return workspacePlan(ask, num);
   const id = `${num}-${slugify(ask)}`;
   const dir = `ui/pages/${id}`;
   const esc = (s: string) => JSON.stringify(s);

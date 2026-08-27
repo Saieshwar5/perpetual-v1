@@ -124,6 +124,22 @@ export interface Choice extends BlockBase {
     label: string;
     /** The line under the label — the metadata a person actually decides by. */
     hint?: string;
+    /**
+     * A command to run when this option is picked — WORKSPACES ONLY.
+     *
+     * Without it, picking an option asks the agent, and a model turn is three
+     * seconds and a fraction of a cent. That is the right price for a
+     * question and a ridiculous one for opening a file you can already see:
+     * twenty clicks browsing a list would be twenty turns.
+     *
+     * So a workspace row can carry the command its own click runs. The
+     * controller executes it in the same sandbox, rewrites the view, and no
+     * model is involved — the agent builds the app, and the app runs without
+     * it. The model comes back only when something needs judgement.
+     *
+     * Ignored on a page: a section is a record, and a record does not act.
+     */
+    run?: string;
   }[];
 }
 
@@ -289,6 +305,15 @@ export function textFields(b: Block): { where: string; text: string; honoured: b
   return out;
 }
 
+/**
+ * How long a workspace row's command may be.
+ *
+ * Generous enough for a real command with paths and flags, short enough that
+ * a view file cannot become a program. Anything longer is a script, and a
+ * script belongs in the workspace directory where it can be read.
+ */
+export const MAX_RUN = 400;
+
 /** See BlockBase. Kept beside the validator so the rule has one definition. */
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
@@ -422,6 +447,13 @@ export function validateBlock(v: unknown): Valid<Block> {
         seen.add(o.id as string);
         if (!str(o.label)) return bad(`options[${i}].label is missing (what the reader reads)`);
         if (o.hint != null && !str(o.hint)) return bad(`options[${i}].hint is empty — omit it instead`);
+        if (o.run != null) {
+          if (!str(o.run) || (o.run as string).length > MAX_RUN) {
+            return bad(`options[${i}].run must be a shell command under ${MAX_RUN} ` +
+              "characters. It is what this row does when it is picked, and it runs in " +
+              "your sandbox exactly as if you had run it yourself.");
+          }
+        }
       }
       break;
     }

@@ -96,15 +96,30 @@ export interface Anchor {
  * — the agent's own token, handed back unchanged.
  */
 export interface Selection {
-  /** The page the control is on. */
+  /** The page the control is on — or the workspace's own id, when `app` is set. */
   page: string;
+  /**
+   * The workspace this came from, when it did.
+   *
+   * A pick in a workspace is a different thing from a pick on a page: the page
+   * is a record and the workspace is a surface being worked in. The agent is
+   * told which, because the useful answer differs — one is "write the next
+   * section", the other is "update the view".
+   */
+  app?: string;
   /**
    * Which control. `choice` blocks are required to carry an `id` precisely so
    * this can name one; a door is named by its page and its question.
    */
   block?: string;
-  /** What kind of control it was. The agent is told different things about each. */
-  control: "choice" | "next";
+  /**
+   * What kind of control it was. The agent is told different things about each.
+   *
+   * `typed` exists for the workspace composer: nothing was clicked, but the
+   * sentence is still ABOUT the workspace rather than about the site, and that
+   * changes what a good answer is.
+   */
+  control: "choice" | "next" | "typed";
   /** The option's own id, or — for a door — the question itself. */
   option: string;
   /** What the reader saw on the thing they touched. */
@@ -138,6 +153,29 @@ export interface Page extends PageMeta {
 export interface Site {
   pages: Page[];
   problems: Problem[];
+}
+
+/**
+ * A WORKSPACE: a surface the agent opens to work in, and the opposite of a
+ * page in the one way that matters.
+ *
+ * A page is a record — written once, sealed when the turn ends, never
+ * unwritten. A list of files is the reverse: you click one, it opens; you go
+ * back, the list returns. It is live, mutable and ephemeral, and it has to be,
+ * or it is not something you can work in.
+ *
+ * So it lives outside `ui/pages/` — in `ui/apps/<id>/` — where the seal does
+ * not reach and the agent may rewrite the view as often as the work needs.
+ * Nothing here is part of the site the reader keeps: when the work produces
+ * something worth keeping, the agent writes THAT into a section.
+ */
+export interface AppView {
+  /** The workspace's own name: `files`, `mail`. One directory, one workspace. */
+  id: string;
+  title: string;
+  /** Which screen of it is showing — for the agent's own bookkeeping. */
+  view?: string;
+  blocks: Block[];
 }
 
 export interface SessionIndex {

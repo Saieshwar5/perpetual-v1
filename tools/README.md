@@ -19,6 +19,9 @@ a probe file in the page, and prints whatever it returns.
 - `probe-fork.js` — walks through one door and checks the others close
 - `probe-measure.js` — the real characters-per-line, and how wide each kind of
                     block actually renders
+- `probe-app.js`   — the workspace panel: it opens beside the site, a row with
+                    a command runs WITHOUT a turn, back returns to the list,
+                    and closing removes the directory
 - `probe-shell.js` — the one-page shell: sidebar widths and persistence, the
                     site clearing it, questions in the scroll (and never being
                     pointable), section navigation, search, new session

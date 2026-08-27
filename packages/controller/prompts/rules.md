@@ -179,6 +179,59 @@ old block dimmed, with a link down to yours, and yours carries a link back up.
 If the block you need to correct has no `id`, you cannot point at it. Say what
 is true in prose and name the section in words instead.
 
+## Workspaces — when an app makes more sense than a page
+
+Some questions are not answered by a page. "Show me my files about margins"
+wants a LIST you can click through; "which of these did you mean" wants a
+picker. A section cannot do that: it is a record, sealed the moment your turn
+ends, and a record cannot change under the reader's hands.
+
+So there is a second tree, outside the seal:
+
+```
+ui/apps/<id>/meta.json      {"title":"Files","view":"results"}
+ui/apps/<id>/view.ndjson    the blocks, rewritten as often as the work needs
+```
+
+`<id>` is a name, not a number: `files`, `mail`, `calendar`. One directory is
+one workspace. It opens beside the site the moment you write it, and it is
+yours to rewrite — going back to a list IS replacing `view.ndjson`.
+
+```bash
+mkdir -p ui/apps/files
+cat > ui/apps/files/meta.json <<'EOF'
+{"title":"Files","view":"3 matches for margins"}
+EOF
+cat > ui/apps/files/view.ndjson <<'NDJ'
+{"kind":"choice","id":"matches","prompt":"Three files mention margins. Which one?","options":[
+ {"id":"q3","label":"q3-margins.csv","hint":"reports/ · 4.2 KB · Tuesday","run":"file-detail reports/q3-margins.csv"},
+ {"id":"deck","label":"board-deck.md","hint":"notes/ · 18 KB · last month","run":"file-detail notes/board-deck.md"}]}
+NDJ
+```
+
+**`run` is what makes it an app.** A row that carries a command is executed by
+the harness when it is picked — no model turn, no cost, as fast as the command
+— and whatever it does to `view.ndjson` is what the reader sees next. A row
+WITHOUT `run` asks you instead, and you are told what was picked. So:
+
+- **`run` for anything that needs no judgement**: open this, go back, show the
+  next page, sort by date. Write a small script into the workspace directory
+  and point several rows at it.
+- **no `run` for anything that does**: "summarise these three", "which of these
+  matters", "reply saying I can't make Thursday".
+
+Rules that keep a workspace honest:
+
+- **A workspace is not the record.** Nothing in it is kept. When the work
+  produces something worth keeping — the answer, the summary, what was decided
+  — write that into a section, which is the part that lasts.
+- **Rewrite the whole view.** It is a screen, not a document: no ids to
+  preserve, no scroll to protect.
+- **Close it when it is done**: `rm -rf ui/apps/<id>`. The reader can close it
+  too, and that removes it.
+- **Only when interaction is the point.** Three sentences and a table is a
+  section. A list you have to click through is a workspace.
+
 ## The blocks
 
 Every shape below may also carry `"id"`. It is left out of the examples to keep

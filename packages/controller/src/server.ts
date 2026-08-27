@@ -10,13 +10,15 @@
  * that does real work is the one that runs a turn.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join, extname, normalize, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRuntime, PROVIDERS, type Runtime } from "./runtime.ts";
 import { createReplayRuntime } from "./replay-runtime.ts";
 import { SessionStore } from "./sessions.ts";
 import { readSite } from "./site.ts";
+import { readApps, commandFor, APPS_REL } from "./apps.ts";
+import { createShell } from "./shell/tool.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
 import { choiceKey, doorKey, type Selection, type Site, type SessionIndex }
@@ -190,7 +192,10 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
   // reader touched is recorded the moment the turn starts — a choice is
   // answered whether or not the turn that followed produced anything, because
   // the reader answered it either way.
-  if (selection?.control === "choice" && selection.block) {
+  // A choice on a PAGE is answered once and the answer stays there as the
+  // record of it. A pick in a workspace is not an answer to anything — it is a
+  // click in a surface that is about to be rewritten — so it is not recorded.
+  if (selection?.control === "choice" && selection.block && !selection.app) {
     index.chosen[choiceKey(selection.page, selection.block)] = selection.option;
     await store.write(index);
   }
@@ -321,6 +326,57 @@ async function rendered(req: IncomingMessage, res: ServerResponse, id: string) {
   return json(res, 204, {});
 }
 
+/**
+ * A row in a workspace was picked, and it carries its own command.
+ *
+ * THE POINT OF THIS ENDPOINT is that no model is involved. Opening a file you
+ * can already see is not a question — it needs no judgement, and paying three
+ * seconds and a model call for it is what makes a generated app feel like a
+ * chatbot wearing a costume. The agent writes the view AND what each row does;
+ * this runs it and hands back what the view became.
+ *
+ * The command comes off the DISK, never off the wire. The click names a
+ * workspace, a block and an option; what runs is whatever the agent wrote
+ * beside that option. Trusting the posted command would turn a click into a
+ * shell.
+ */
+const ACT_TIMEOUT_SEC = 20;
+
+async function act(req: IncomingMessage, res: ServerResponse, id: string) {
+  if (inFlight.has(id)) return json(res, 409, { error: "a turn is running" });
+
+  const body = await new Promise<string>((r) => {
+    let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b));
+  });
+  const { app, block, option } = JSON.parse(body || "{}") as
+    { app?: string; block?: string; option?: string };
+  if (!app || !block || !option) return json(res, 400, { error: "app, block and option" });
+
+  const { apps } = await readApps(store.siteDir(id));
+  const view = apps.find((a) => a.id === app);
+  if (!view) return json(res, 404, { error: `no workspace called ${app}` });
+
+  const found = commandFor(view, block, option);
+  // Not every row acts. One without a command is a question for the agent, and
+  // the client asks it as a turn instead — this says so rather than guessing.
+  if (!found) return json(res, 200, { ran: false, app: view });
+
+  const shell = createShell(sandboxFor(id, sealedFor(await readSite(store.siteDir(id)),
+    await store.read(id))));
+  const r = await shell.run({ command: found.run, timeoutSec: ACT_TIMEOUT_SEC });
+
+  // Whatever the command did to the view, the answer is the view as it now is.
+  const after = await readApps(store.siteDir(id));
+  return json(res, 200, {
+    ran: true,
+    exitCode: r.exitCode,
+    // A tail, not a log: enough to explain a failure, never a terminal.
+    output: r.text.split("\n").slice(-4).join("\n").slice(-1200),
+    app: after.apps.find((a) => a.id === app) ?? null,
+    problems: after.problems,
+  });
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
   const p = url.pathname;
@@ -345,11 +401,21 @@ const server = createServer(async (req, res) => {
       return json(res, 200, await store.list());
     }
 
-    const m = /^\/sessions\/([a-f0-9]+)(\/turn|\/site|\/rendered)?$/.exec(p);
+    const m = /^\/sessions\/([a-f0-9]+)(\/turn|\/site|\/rendered|\/apps|\/act)?$/.exec(p);
     if (m) {
       const id = m[1]!;
       if (m[2] === "/turn" && req.method === "POST") return await turn(req, res, id);
       if (m[2] === "/rendered" && req.method === "POST") return await rendered(req, res, id);
+      if (m[2] === "/act" && req.method === "POST") return await act(req, res, id);
+      if (m[2] === "/apps" && req.method === "DELETE") {
+        // The reader closes a workspace, and closing it means it is GONE — a
+        // panel that reappears on reload was not closed, it was hidden.
+        const app = url.searchParams.get("app") ?? "";
+        if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(app)) return json(res, 400, { error: "app" });
+        await rm(join(store.siteDir(id), APPS_REL, app), { recursive: true, force: true });
+        return json(res, 200, { closed: app });
+      }
+      if (m[2] === "/apps") return json(res, 200, await readApps(store.siteDir(id)));
       if (!m[2] && req.method === "DELETE") {
         if (inFlight.has(id)) return json(res, 409, { error: "a turn is running" });
         await store.remove(id);

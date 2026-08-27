@@ -6,13 +6,16 @@
  *   `tool_*`   — the agent WORKING. Shell commands, their output, exit codes.
  *   `page_*`   — the agent SPEAKING. Derived by watching the session directory,
  *                never reported by the agent itself.
+ *   `app_*`    — the agent WORKING WITH YOU: a workspace opening, its view
+ *                changing, or it closing. Watched the same way, from a
+ *                different directory — the one the seal does not reach.
  *
  * Nothing the agent says produces a `page_*` event. Only what it *writes*
  * does. That is what makes "the filesystem is the API" true rather than
  * aspirational: the renderer trusts the directory, and the directory only.
  */
 import type { Block } from "./blocks.ts";
-import type { Page, Problem } from "./site.ts";
+import type { AppView, Page, Problem } from "./site.ts";
 
 export type TurnEvent =
   /** A turn began. */
@@ -59,6 +62,20 @@ export type TurnEvent =
   | { type: "page_remove"; page: string }
   /** Title or ask changed. */
   | { type: "page_meta"; page: string; title: string; ask?: string }
+
+  /** A workspace appeared — `ui/apps/<id>/` was written. */
+  | { type: "app_open"; app: AppView }
+  /**
+   * Its view changed.
+   *
+   * Whole-view, never block-by-block. A workspace is small and it is meant to
+   * change — going back to the list IS the file being rewritten — so the
+   * reconciliation a page needs (which keeps a reader's scroll and a held
+   * anchor through an amendment) would be machinery in service of nothing.
+   */
+  | { type: "app_view"; app: AppView }
+  /** The workspace directory went away. */
+  | { type: "app_close"; app: string }
 
   /** Validation found something wrong. Also fed back to the agent. */
   | { type: "problem"; problem: Problem }
