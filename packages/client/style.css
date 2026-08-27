@@ -717,6 +717,43 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .doc.lay-gallery > .figure { margin-bottom: 2.4rem; }
 .doc.lay-gallery > .figure .svgwrap { padding: 28px; }
 
+/* ----------------------------------------------------------- revisions */
+
+/* The agent cannot unwrite what it published, so a correction is a new block
+   that names the one it replaces. Both halves are marked: dimmed above, with a
+   way down to the revision; and a way back up from the revision itself.
+
+   Dimmed rather than struck through or hidden. The old text is still part of
+   the record and still readable — what it must not be is mistaken for the
+   current answer by someone scrolling past it a week later. */
+.doc > .superseded { opacity: .5; }
+.doc > .superseded:hover { opacity: .75; }
+
+/* OUT OF FLOW, deliberately. The mark lives inside the block it marks — it
+   cannot be a sibling, because `.doc > *` is addressed by index and inserting
+   one would renumber every block below it. Inside a `metrics` row or a `split`,
+   though, an in-flow child becomes another CELL: the mark lined up beside the
+   numbers as if it were one of them. Absolute takes it out of the grid, and the
+   reserved margin below the marked block is where it sits. */
+.doc > .superseded, .doc > [data-supersedes] { margin-bottom: 2.4rem; }
+
+.revmark {
+  position: absolute; right: 0; bottom: -1.75rem;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 999px;
+  color: var(--ink-3); font-family: var(--sans); font-size: .68rem;
+  padding: 2px 10px;
+}
+.revmark:hover { border-color: var(--accent); color: var(--accent); }
+.doc > .superseded .revmark { border-style: dashed; }
+
+/* Arriving somewhere you were sent: say "here" once, then stop. */
+.found { animation: found 1.6s var(--ease); }
+@keyframes found {
+  0%, 70% { background: var(--accent-sf); box-shadow: 0 0 0 6px var(--accent-sf); }
+  100% { background: transparent; box-shadow: 0 0 0 6px transparent; }
+}
+
 /* ------------------------------------------------------- reader settings */
 
 .chipbtn { font-family: var(--sans); cursor: pointer; }

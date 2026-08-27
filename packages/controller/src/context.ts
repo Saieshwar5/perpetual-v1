@@ -181,14 +181,11 @@ export function turnMessage(
       opts.pastAsks.slice(-8).map((a) => `  - ${a}`).join("\n")}`);
   }
 
-  // The anchor now decides placement as well as reference.
-  //
-  // It used to be a hint about what "that" meant, and rules.md judged from the
-  // prose whether the answer amended that page or started a new one. That
-  // judgement was the least reliable thing in the system and it was invisible
-  // until it was wrong. The site is one scroll now, so there is nothing to
-  // judge: a pointed-at section is where the answer goes, and everything else
-  // goes at the end.
+  // The anchor says what "this" MEANS. It no longer says where the answer
+  // goes, because nothing does: published sections are read-only and every
+  // answer is written at the end. What the anchor still does — and the only
+  // thing it was ever good at — is resolve the referent, so "is that right?"
+  // is a question about one paragraph rather than about the site.
   if (opts.anchor) {
     const page = opts.site.pages.find((p) => p.id === opts.anchor!.page);
     if (page) {
@@ -209,13 +206,14 @@ export function turnMessage(
         (opts.anchor.quote
           ? `.\nThey have highlighted, inside it:\n\n> ${opts.anchor.quote}\n\nTreat that as what "this" refers to`
           : "") +
-        ". They are pointing at it, so that is the section the answer belongs " +
-        "in: change it in place with `page` rather than writing a new one. If " +
-        "they are correcting or refining it, rewrite it in place." +
+        ". That section is published and cannot be changed — treat this as the " +
+        "SUBJECT of the question and answer in a new section at the end." +
         (at?.id
-          ? ` That block is named \`${at.id}\` — if the fix is confined to it, rewrite ` +
-            "only its line and the reader's page updates around it without being rebuilt."
-          : ""),
+          ? ` That block is named \`${at.id}\`, so if your answer replaces what it says, ` +
+            `put \`"supersedes":"${page.id}/${at.id}"\` on the block that replaces it: ` +
+            "the reader then sees the old one marked as revised, with a link to yours."
+          : " Nothing there is named, so you cannot point a `supersedes` at it — " +
+            "say what is true and name the section in words."),
       );
     }
   }

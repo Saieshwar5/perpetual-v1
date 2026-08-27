@@ -49,7 +49,26 @@ export interface SandboxConfig {
   net: boolean;
   /** Set by PERPETUAL_UNSAFE=1. Development only; never a fallback. */
   unsafe: boolean;
+  /**
+   * Section ids that are PUBLISHED, and therefore read-only for this turn.
+   *
+   * The agent may add to the site forever and may never unwrite it. That rule
+   * cannot live in the prompt: the scorecard caught the model running `sed -i`
+   * on a page file and writing its own Python editor when it lacked a tool, so
+   * a rule it can break is not a rule. It cannot live in the `page` program
+   * either — the agent has a whole shell, and `cat >` does not go through it.
+   *
+   * It lives in the kernel, the same way containment does everywhere else
+   * here. Each of these is bind-mounted over itself read-only inside the
+   * otherwise-writable tree, so `sed -i`, `cat >`, `rm` and a hand-rolled
+   * editor all fail with EROFS — and the directory cannot be deleted or
+   * renamed either, because a mount point cannot be unlinked.
+   */
+  sealed?: string[];
 }
+
+/** Section ids come off a directory listing; they still have to be safe as paths. */
+const SECTION_RE = /^[0-9]{3}-[a-z0-9][a-z0-9-]*$/;
 
 export function bwrapAvailable(): boolean {
   try {
@@ -143,11 +162,28 @@ export function wrapCommand(script: string, cfg: SandboxConfig): { file: string;
     "--ro-bind", toolsDir(), TOOLS_MOUNT,
     // The one writable path.
     "--bind", cfg.root, MOUNT,
+    // …with the published sections mounted read-only over themselves. Order
+    // matters: bwrap applies these in sequence, so a ro-bind onto a subpath of
+    // an already-bound tree makes exactly that subtree read-only.
+    ...sealedBinds(cfg),
     "--chdir", MOUNT,
   ];
   for (const [k, v] of Object.entries(sandboxEnv(MOUNT))) args.push("--setenv", k, v);
   args.push("/bin/bash", "-c", script);
   return { file: "bwrap", args };
+}
+
+/**
+ * The read-only overlays for published sections. Exported for the test that
+ * checks a sealed section really is unwritable from inside the sandbox.
+ */
+export function sealedBinds(cfg: SandboxConfig): string[] {
+  const args: string[] = [];
+  for (const id of cfg.sealed ?? []) {
+    if (!SECTION_RE.test(id)) continue;      // never build a path out of anything else
+    args.push("--ro-bind", join(cfg.root, "ui", "pages", id), `${MOUNT}/ui/pages/${id}`);
+  }
+  return args;
 }
 
 /** The path the agent is told about, which differs only in unsafe mode. */
@@ -156,6 +192,9 @@ export function mountPath(cfg: SandboxConfig): string {
 }
 
 export function describeSandbox(cfg: SandboxConfig): string {
-  if (cfg.unsafe) return "UNSANDBOXED (PERPETUAL_UNSAFE=1)";
-  return `bubblewrap · ${cfg.net ? "network ON" : "no network"} · writable: ${MOUNT}`;
+  const sealed = cfg.sealed?.length
+    ? ` · ${cfg.sealed.length} published section${cfg.sealed.length === 1 ? "" : "s"} read-only`
+    : "";
+  if (cfg.unsafe) return `UNSANDBOXED (PERPETUAL_UNSAFE=1)${sealed}`;
+  return `bubblewrap · ${cfg.net ? "network ON" : "no network"} · writable: ${MOUNT}${sealed}`;
 }

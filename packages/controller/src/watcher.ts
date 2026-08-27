@@ -23,6 +23,17 @@ const key = (p: Problem) => `${p.page}:${p.line ?? "-"}:${p.message}`;
 const same = (a: Block, b: Block) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
+ * Is this section exactly what was published?
+ *
+ * Everything the reader can see, which is the meta and the blocks. `tier` is
+ * derived from the blocks, so comparing it would be comparing the same fact
+ * twice.
+ */
+const samePage = (a: Page, b: Page) =>
+  a.title === b.title && a.ask === b.ask && a.layout === b.layout
+  && JSON.stringify(a.blocks) === JSON.stringify(b.blocks);
+
+/**
  * Is this page reconcilable by name?
  *
  * All-or-nothing, deliberately. A half-keyed list is the worst of both: the
@@ -93,9 +104,26 @@ export class SiteWatcher {
   private seenProblems = new Set<string>();
   /** Problems raised since the last drain — fed back to the agent. */
   private fresh: Problem[] = [];
+  /**
+   * Published sections. A change to one of these is not rendered.
+   *
+   * The sandbox already makes them read-only, so under bwrap this can never
+   * fire. It exists for the two cases the mount does not cover: PERPETUAL_UNSAFE=1,
+   * which has no sandbox at all, and any future path that writes into the site
+   * without going through it. A guarantee with one point of failure is not a
+   * guarantee.
+   */
+  private sealed = new Set<string>();
+  /** Sealed sections already complained about, so one tamper is one complaint. */
+  private tampered = new Set<string>();
 
   constructor(siteDir: string) {
     this.siteDir = siteDir;
+  }
+
+  /** Declare what is published. Called once, at turn start. */
+  seal(ids: Iterable<string>) {
+    this.sealed = new Set(ids);
   }
 
   /** Adopt the current state without emitting. Used at turn start. */
@@ -113,6 +141,26 @@ export class SiteWatcher {
 
     for (const [i, page] of site.pages.entries()) {
       const before = this.prev.get(page.id);
+
+      // Published, and changed anyway. The reader keeps what was published:
+      // no events go out, `prev` is left holding the published version, and
+      // the agent is told what it did and what to do instead.
+      if (before && this.sealed.has(page.id) && !samePage(before, page)) {
+        next.set(page.id, before);
+        if (!this.tampered.has(page.id)) {
+          this.tampered.add(page.id);
+          const problem: Problem = {
+            page: page.id,
+            message: "this section is published and cannot be changed — the reader is " +
+              "still seeing what was written, and your change was not applied. Say it " +
+              "in a new section instead, and if it replaces something, put " +
+              `\`"supersedes":"${page.id}/<block-id>"\` on the block that replaces it.`,
+          };
+          this.fresh.push(problem);
+          events.push({ type: "problem", problem });
+        }
+        continue;
+      }
 
       if (!before) {
         // Open the page empty, then stream its blocks in. The client can start
@@ -160,8 +208,27 @@ export class SiteWatcher {
       }
     }
 
-    for (const id of this.prev.keys()) {
-      if (!next.has(id)) events.push({ type: "page_remove", page: id });
+    for (const [id, page] of this.prev) {
+      if (next.has(id)) continue;
+      // A published section that has been deleted stays on the reader's
+      // screen. Removing it is the one change that cannot be corrected by
+      // writing more, so the refusal matters most here.
+      if (this.sealed.has(id)) {
+        next.set(id, page);
+        if (!this.tampered.has(id)) {
+          this.tampered.add(id);
+          const problem: Problem = {
+            page: id,
+            message: "this section is published and cannot be deleted. It is still on " +
+              "the reader's screen. Put it back if you removed its files, and write " +
+              "what you wanted to say in a new section.",
+          };
+          this.fresh.push(problem);
+          events.push({ type: "problem", problem });
+        }
+        continue;
+      }
+      events.push({ type: "page_remove", page: id });
     }
 
     for (const p of site.problems) {

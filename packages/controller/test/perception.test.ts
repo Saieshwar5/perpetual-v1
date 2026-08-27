@@ -33,7 +33,7 @@ test("a long page is reported as a measurement, with the reader's conditions", (
   assert.match(note, /how your page actually rendered/);
   assert.match(note, /2\.4 screens/, "the number, so the agent can tell whether it fixed it");
   assert.match(note, /1394px width and normal text size/, "whose screen this was");
-  assert.match(note, /splitting/, "and what to do about it");
+  assert.match(note, /write the rest as the next section/, "and what to do about it");
 });
 
 test("a page that scrolls by a hair is not worth a word", () => {

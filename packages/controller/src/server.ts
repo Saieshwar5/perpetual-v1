@@ -19,7 +19,8 @@ import { SessionStore } from "./sessions.ts";
 import { readSite } from "./site.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
-import { choiceKey, doorKey, type Selection } from "@perpetual/shared/site";
+import { choiceKey, doorKey, type Selection, type Site, type SessionIndex }
+  from "@perpetual/shared/site";
 import { onClientGone } from "./disconnect.ts";
 import { NoteQueue } from "./notes.ts";
 import type { RenderReport } from "@perpetual/shared/render";
@@ -100,8 +101,37 @@ try {
   runtimeError = e instanceof Error ? e.message : String(e);
 }
 
-const sandboxFor = (id: string): SandboxConfig =>
-  ({ root: store.siteDir(id), net: NET, unsafe: UNSAFE });
+const sandboxFor = (id: string, sealed: string[] = []): SandboxConfig =>
+  ({ root: store.siteDir(id), net: NET, unsafe: UNSAFE, sealed });
+
+/**
+ * Which sections this turn may still write into.
+ *
+ * Everything that exists is published — except what the last turn left open,
+ * and openness is decided by the controller at the end of a turn (see
+ * `stillOpen`). A section that was cut off mid-write, or that is still
+ * carrying validation problems, was never really published: sealing it would
+ * make a half-written section permanent and forbid the agent from repairing
+ * its own mistake.
+ */
+function sealedFor(site: Site, index: SessionIndex): string[] {
+  const open = new Set(index.open ?? []);
+  return site.pages.map((p) => p.id).filter((pid) => !open.has(pid));
+}
+
+/**
+ * What to leave unsealed for the NEXT turn.
+ *
+ * Only sections this turn touched, and only for the two reasons above. A turn
+ * that finished cleanly leaves nothing open, which is the point: the ordinary
+ * outcome is that everything written becomes a record.
+ */
+function stillOpen(touched: string[], site: Site, stopped: string): string[] {
+  const broken = new Set(site.problems.map((p) => p.page));
+  const live = new Set(site.pages.map((p) => p.id));
+  return touched.filter((pid) =>
+    live.has(pid) && (stopped !== "done" || broken.has(pid)));
+}
 
 const json = (res: ServerResponse, code: number, body: unknown) => {
   const s = JSON.stringify(body);
@@ -188,7 +218,7 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
   const stream = runTurn({
     ask: input,
     runtime,
-    sandbox: sandboxFor(id),
+    sandbox: sandboxFor(id, sealedFor(before, index)),
     pastAsks: index.asks,
     ...(anchor?.page ? {
       anchor: {
@@ -237,6 +267,8 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
 
     index.asks.push(input);
     index.pageCount = site.pages.length;
+    // Everything else this turn wrote is now a record.
+    index.open = stillOpen(s.touched, site, s.stopped);
     // The session takes its name from its first page — the same way a website
     // is named by its home page rather than by a field someone had to fill in.
     if (site.pages[0]) index.title = site.pages[0].title;

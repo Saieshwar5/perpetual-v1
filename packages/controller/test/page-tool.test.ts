@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, writeFile, readFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, access, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -189,47 +189,45 @@ test("moving reorders without rewriting anything", async () => {
     ["claim", "lead", "by-quarter", "numbers", "how", "doors"]);
 });
 
-/* ----------------------------------------- the answer to "this page is long" */
+/* ------------------------------------------- published sections are a record */
 
-test("split moves the tail, gives it a claim, and links back", async () => {
+test("split is gone, because moving the tail away is a deletion", async () => {
   const root = await site();
   const r = await page(root, "split", PAGE, "--from", "by-quarter",
     "--into", "004-volume", "How volume moves the margin");
-  assert.equal(r.code, 0, r.err);
-
-  const left = await read(root);
-  assert.deepEqual(ids(left), ["claim", "lead", "numbers", "how", "to-volume"]);
-  assert.equal(left.at(-1)!.kind, "link", "the page it came from keeps a way in");
-
-  const made = await read(root, "004-volume");
-  assert.deepEqual(made.map((b) => b.kind), ["heading", "table", "next"],
-    "a page opens with its claim and ends with its doors");
-  assert.equal(made[0]!.id, "claim", "ids are unique per page, so `claim` is free here");
-
-  const meta = JSON.parse(
-    await readFile(join(root, "ui", "pages", "004-volume", "meta.json"), "utf8"),
-  );
-  assert.equal(meta.title, "How volume moves the margin");
-  assert.equal(meta.ask, "how?", "the new page answers the same question");
-});
-
-test("split refuses to move the whole page, or only the doors", async () => {
-  const root = await site();
-  const whole = await page(root, "split", PAGE, "--from", "claim", "--into", "004-x", "X");
-  assert.equal(whole.code, 2);
-  assert.match(whole.err, /move the whole page/);
-
-  const doorsOnly = await page(root, "split", PAGE, "--from", "doors", "--into", "004-y", "Y");
-  assert.equal(doorsOnly.code, 2);
-  assert.match(doorsOnly.err, /only the closing questions/);
-});
-
-test("split will not overwrite a page that exists", async () => {
-  const root = await site();
-  await mkdir(join(root, "ui", "pages", "004-taken"), { recursive: true });
-  const r = await page(root, "split", PAGE, "--from", "by-quarter", "--into", "004-taken", "T");
   assert.equal(r.code, 2);
-  assert.match(r.err, /already exists/);
+  assert.match(r.err, /`split` is gone/);
+  assert.match(r.err, /next section/, "and it says what to do instead");
+  assert.deepEqual(ids(await read(root)), ids(START), "the page it was aimed at is intact");
+});
+
+test("a published section refuses every change, and names the way round it", async () => {
+  const root = await site();
+  await chmod(join(root, "ui", "pages", PAGE), 0o555);
+  try {
+    for (const args of [
+      ["set", PAGE, "lead", '{"kind":"prose","text":"rewritten"}'],
+      ["append", PAGE, '{"kind":"prose","id":"extra","text":"more"}'],
+      ["after", PAGE, "lead", '{"kind":"prose","id":"extra","text":"more"}'],
+      ["rm", PAGE, "lead"],
+      ["move", PAGE, "lead", "--after", "how"],
+    ]) {
+      const r = await page(root, ...args);
+      assert.equal(r.code, 2, `${args[0]} should have been refused`);
+      assert.match(r.err, /is published/);
+      assert.match(r.err, /supersedes/, "the refusal carries the alternative");
+    }
+    assert.deepEqual(ids(await read(root)), ids(START), "and nothing moved");
+  } finally {
+    await chmod(join(root, "ui", "pages", PAGE), 0o755);      // so the tmpdir can be cleaned
+  }
+});
+
+test("a section this turn is still writing is untouched by any of that", async () => {
+  const root = await site();
+  const r = await page(root, "append", PAGE, '{"kind":"prose","id":"extra","text":"more"}');
+  assert.equal(r.code, 0, r.err);
+  assert.ok(ids(await read(root)).includes("extra"));
 });
 
 /* ------------------------------------------------------------- the file */
