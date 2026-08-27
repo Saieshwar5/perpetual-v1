@@ -106,7 +106,8 @@ export function createShell(cfg: SandboxConfig) {
       // per-run values have to be merged here instead.
       env: cfg.unsafe
         ? {
-            PATH: `${toolsDir()}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+            PATH: [toolsDir(), ...(cfg.binPaths ?? []),
+              process.env.PATH ?? "/usr/bin:/bin"].join(":"),
             HOME: cfg.root,
             PERPETUAL_SITE: cfg.root,
             ...(req.env ?? {}),

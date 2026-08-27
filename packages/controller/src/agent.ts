@@ -85,6 +85,8 @@ export interface TurnOptions {
    * either one while it still has steps left.
    */
   notes?: { drain(): string | null };
+  /** The tool adapters installed, for the one-line index in the turn message. */
+  adapters?: import("./adapters.ts").Adapter[];
   /** What the reader has already taken and answered on this site. */
   answered?: Record<string, string>;
   chosen?: Record<string, string>;
@@ -215,6 +217,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
       });
       convo.user(turnMessage({
         ask: o.ask, site, pastAsks: o.pastAsks, apps: openApps,
+        ...(o.adapters ? { adapters: o.adapters } : {}),
         ...(o.anchor ? { anchor: o.anchor } : {}),
         ...(o.selection ? { selection: o.selection } : {}),
         ...(o.answered ? { answered: o.answered } : {}),

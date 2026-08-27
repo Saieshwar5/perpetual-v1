@@ -10,7 +10,7 @@
  * that does real work is the one that runs a turn.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { join, extname, normalize, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRuntime, PROVIDERS, type Runtime } from "./runtime.ts";
@@ -18,6 +18,7 @@ import { createReplayRuntime } from "./replay-runtime.ts";
 import { SessionStore } from "./sessions.ts";
 import { readSite } from "./site.ts";
 import { readApps, commandFor, fieldEnv, APPS_REL } from "./apps.ts";
+import { readAdapters, adaptersDir, type Adapter } from "./adapters.ts";
 import { createShell } from "./shell/tool.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
@@ -103,8 +104,25 @@ try {
   runtimeError = e instanceof Error ? e.message : String(e);
 }
 
-const sandboxFor = (id: string, sealed: string[] = []): SandboxConfig =>
-  ({ root: store.siteDir(id), net: NET, unsafe: UNSAFE, sealed });
+/**
+ * The adapters, read once at boot.
+ *
+ * Not per turn: they are configuration, they do not change while the server
+ * runs, and re-reading a directory of markdown eight times a second to
+ * discover that nothing moved is the mistake the site cache exists to fix.
+ * Restart to pick up a new one — the same rule as the model.
+ */
+/** The reader's own adapters. Usually absent, which is not a problem. */
+const LOCAL_ADAPTERS = join(ROOT, "tools");
+let HAS_LOCAL_ADAPTERS = false;
+let ADAPTERS: Adapter[] = [];
+
+const sandboxFor = (id: string, sealed: string[] = []): SandboxConfig => ({
+  root: store.siteDir(id), net: NET, unsafe: UNSAFE, sealed,
+  adapters: adaptersDir(),
+  ...(HAS_LOCAL_ADAPTERS ? { localAdapters: LOCAL_ADAPTERS } : {}),
+  binPaths: ADAPTERS.filter((a) => a.hasBin).map((a) => `${a.path}/bin`),
+});
 
 /**
  * Which sections this turn may still write into.
@@ -225,6 +243,7 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
     runtime,
     sandbox: sandboxFor(id, sealedFor(before, index)),
     pastAsks: index.asks,
+    adapters: ADAPTERS,
     ...(anchor?.page ? {
       anchor: {
         page: anchor.page,
@@ -457,6 +476,17 @@ server.on("error", (e: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
+// Read before the first turn can ask for them, and complained about loudly:
+// an adapter with a broken manifest is one the agent will never be told about,
+// which looks exactly like an adapter that was never installed.
+{
+  HAS_LOCAL_ADAPTERS = await stat(LOCAL_ADAPTERS).then((s) => s.isDirectory(), () => false);
+  const { adapters, problems } = await readAdapters(
+    HAS_LOCAL_ADAPTERS ? LOCAL_ADAPTERS : undefined);
+  ADAPTERS = adapters;
+  for (const p of problems) console.error(`  tool ${p.name}: ${p.message}`);
+}
+
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`\n  perpetual  http://127.0.0.1:${PORT}`);
   console.log(`  provider  ${REPLAY ? "replay" : PROVIDER}`);
@@ -464,5 +494,8 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`  key       ${REPLAY ? "replay mode (no key needed)"
     : API_KEY ? `${KEY_ENV} set` : `${KEY_ENV} NOT SET — /turn will 503`}`);
   console.log(`  sandbox   ${describeSandbox({ root: "", net: NET, unsafe: UNSAFE })}`);
-  console.log(`  sessions  ${ROOT}\n`);
+  console.log(`  sessions  ${ROOT}`);
+  console.log(`  tools     ${ADAPTERS.length
+    ? ADAPTERS.map((a) => a.name + (a.local ? "*" : "")).join(", ")
+    : "none"}\n`);
 });

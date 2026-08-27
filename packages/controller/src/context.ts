@@ -17,6 +17,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Block } from "@perpetual/shared/blocks";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
+import { describeAdapters, type Adapter } from "./adapters.ts";
 import type { Anchor, AppView, Selection, Site } from "@perpetual/shared/site";
 
 const PROMPTS = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
@@ -189,6 +190,7 @@ export function turnMessage(
   opts: {
     ask: string; site: Site; pastAsks: string[];
     apps?: AppView[];
+    adapters?: Adapter[];
     anchor?: Anchor; selection?: Selection;
     answered?: Record<string, string>; chosen?: Record<string, string>;
   },
@@ -205,6 +207,11 @@ export function turnMessage(
     parts.push(`This session's site has ${opts.site.pages.length} page(s):\n${inventory}\n`);
     parts.push(`A new page would be \`${n}-<slug>\`.`);
   }
+
+  // Names and shapes only. The recipes stay on disk: that is the whole point
+  // of a recipe on disk — twenty tools cost the same as none until one is used.
+  const tools = describeAdapters(opts.adapters ?? []);
+  if (tools) parts.push(tools);
 
   if (opts.apps?.length) {
     const list = opts.apps.map((a) => {

@@ -285,6 +285,145 @@ export const MAX_ROWS = 50;
 
 export type Valid<T> = { ok: true; value: T } | { ok: false; error: string };
 
+/**
+ * Every block, in one line and one example.
+ *
+ * This exists so the vocabulary can be PRINTED — `pnpm blocks` writes
+ * docs/ui-elements.md from it — and a printed reference that is written by
+ * hand is wrong three pull requests later. We added four kinds and two fields
+ * in two days; a copy of the list somewhere else would already be stale.
+ *
+ * Kept beside the validator on purpose, and a test asserts that every kind has
+ * an entry: adding a block without saying what it is fails the suite rather
+ * than quietly shipping an undocumented one.
+ */
+export interface BlockDoc {
+  /** What it is FOR, in one sentence. Not what it looks like. */
+  purpose: string;
+  /** A real one, valid against the validator below. */
+  example: string;
+  /** The limits that are checked, in the reader's words. */
+  limits?: string;
+  /** Where it may appear. Absent means anywhere. */
+  only?: "workspace";
+}
+
+export const BLOCK_DOCS: Record<BlockKind, BlockDoc> = {
+  heading: {
+    purpose: "The page's claim — the one sentence the rest of it has to earn.",
+    example: '{"kind":"heading","text":"A wing flies by throwing air downwards"}',
+    limits: "Exactly one per page, and it is the first block.",
+  },
+  section: {
+    purpose: "A break inside a long explanation. A movement, not a second headline.",
+    example: '{"kind":"section","text":"It is compression, not friction"}',
+  },
+  prose: {
+    purpose: "A paragraph. The default, not the fallback — most answers are these.",
+    example: '{"kind":"prose","text":"Lift is the reaction to a **mass of air** pushed down."}',
+    limits: "Three inline marks and no others: **bold**, *italic*, `code`.",
+  },
+  quote: {
+    purpose: "One sentence pulled out because it carries the point.",
+    example: '{"kind":"quote","text":"Pilots call it the coffin corner."}',
+  },
+  list: {
+    purpose: "Short items that belong together and have no second dimension.",
+    example: '{"kind":"list","items":["Speed, which sets how much air arrives","Angle"]}',
+    limits: "2 or more items.",
+  },
+  code: {
+    purpose: "Literal text — a command, a file, an exact value. Nothing inside is interpreted.",
+    example: '{"kind":"code","text":"npm run build","lang":"bash"}',
+  },
+  note: {
+    purpose: "The caveat or the gotcha, set aside from the argument.",
+    example: '{"kind":"note","text":"Q2 is provisional.","tone":"warn"}',
+    limits: "`tone` is `info` or `warn`.",
+  },
+  link: {
+    purpose: "A jump to another section. Rarely needed in one scroll.",
+    example: '{"kind":"link","page":"002-costs","text":"Cost breakdown"}',
+  },
+  metrics: {
+    purpose: "Real numbers worth reading on their own, not a restatement of the prose.",
+    example: '{"kind":"metrics","items":[{"value":"$4.2M","label":"ARR","emphasis":true},'
+      + '{"value":"18%","label":"Growth"}]}',
+    limits: "2 to 4 items; values are strings, so the agent controls the formatting.",
+  },
+  chart: {
+    purpose: "A trend or comparison where the SHAPE of the numbers is the argument.",
+    example: '{"kind":"chart","values":[3,7,12,9],"labels":["Q1","Q2","Q3","Q4"],'
+      + '"highlight":[2],"caption":"Margin by quarter"}',
+    limits: "3 or more values. Two numbers are a comparison, not a shape.",
+  },
+  table: {
+    purpose: "Genuinely two-dimensional data. If one column would do, use a list.",
+    example: '{"kind":"table","headers":["Altitude","Drag"],"rows":[["Low","High"]]}',
+    limits: "Every cell a string.",
+  },
+  split: {
+    purpose: "A real contrast: before and after, option A against option B.",
+    example: '{"kind":"split","panels":[{"title":"Before","text":"…"},'
+      + '{"title":"After","text":"…"}]}',
+    limits: "Exactly 2 panels. A third makes it a table.",
+  },
+  flow: {
+    purpose: "An ordered sequence where the order carries the meaning.",
+    example: '{"kind":"flow","steps":[{"label":"SYN"},{"label":"ACK","warn":true}]}',
+    limits: "2 to 6 steps.",
+  },
+  figure: {
+    purpose: "A drawing, when a relationship is spatial and prose cannot say it.",
+    example: '{"kind":"figure","src":"election.svg","caption":"Timeout promotes a follower"}',
+    limits: "An SVG the agent writes beside the page. A viewBox is required, no width or "
+      + "height, and no colour may be named — only currentColor and the palette tokens.",
+  },
+  next: {
+    purpose: "The questions this page opened and did not answer. Clicking one asks it.",
+    example: '{"kind":"next","items":["Why does gasoline stop at 9:1?"]}',
+    limits: "1 to 5, at most one per page, and it is the last block.",
+  },
+  choice: {
+    purpose: "A question the agent cannot proceed without an answer to.",
+    example: '{"kind":"choice","id":"which-file","prompt":"Which one did you mean?",'
+      + '"options":[{"id":"a","label":"report-2025.pdf","hint":"~/Documents · 2.1 MB"},'
+      + '{"id":"b","label":"report-final.pdf","hint":"~/Downloads · yesterday"}]}',
+    limits: "2 to 8 options, `id` required. The hint is what people decide by.",
+  },
+  rows: {
+    purpose: "The list you scan and act on: an inbox, a file list, search results.",
+    example: '{"kind":"rows","id":"inbox","items":[{"id":"m1","title":"Invoice #4821",'
+      + '"meta":"Acme · yesterday","state":"unread","run":"mail show 4821",'
+      + '"actions":[{"id":"arch","label":"Archive","run":"mail archive 4821"}]}]}',
+    limits: "Up to 50 rows, `state` is unread/done/warn, at most 3 actions each.",
+    only: "workspace",
+  },
+  fields: {
+    purpose: "The key/value header a detail view opens with.",
+    example: '{"kind":"fields","items":[{"label":"From","value":"Acme"},'
+      + '{"label":"Received","value":"Tuesday 14:02"}]}',
+    limits: "1 to 12 pairs. More than a dozen facts is the detail itself.",
+    only: "workspace",
+  },
+  form: {
+    purpose: "Inputs the reader fills and submits — the block that makes a workspace act.",
+    example: '{"kind":"form","id":"reply","submit":"Send","run":"mail reply 4821",'
+      + '"fields":[{"id":"to","label":"To","type":"text","value":"a@b.c"},'
+      + '{"id":"body","label":"Message","type":"textarea","rows":6}]}',
+    limits: "1 to 10 fields; types text, textarea, select, number, checkbox, date. Values "
+      + "reach the command as $FIELD_<ID> environment variables — never write them into it.",
+    only: "workspace",
+  },
+  confirm: {
+    purpose: "The gate before anything irreversible or outward-facing.",
+    example: '{"kind":"confirm","id":"send","prompt":"Send this reply?",'
+      + '"detail":"84 words to billing@acme.com","confirm":"Send","run":"mail send draft"}',
+    limits: "`detail` says exactly what is about to happen.",
+    only: "workspace",
+  },
+};
+
 /* ------------------------------------------------------- inline vocabulary */
 
 /**

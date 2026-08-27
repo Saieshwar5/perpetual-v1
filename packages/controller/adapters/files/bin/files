@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""files — search and read the session's workspace, and draw the result.
+
+The recipe beside this (tool.md) says what the view should look like. This
+writes it, which is the difference between instructions and an adapter: the
+agent runs one command instead of authoring the same JSON every session, and
+what the reader sees cannot drift.
+
+Everything it writes goes to ui/apps/files/ — the workspace tree, outside the
+seal, where a view is meant to be replaced.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+APP = "files"
+MAX_MATCHES = 30
+SNIPPET = 90
+
+
+def site():
+    return os.environ.get("PERPETUAL_SITE") or os.environ.get("HOME") or os.getcwd()
+
+
+def app_dir():
+    d = os.path.join(site(), "ui", "apps", APP)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def die(*lines):
+    for line in lines:
+        print(f"files: {line}", file=sys.stderr)
+    sys.exit(2)
+
+
+def write_view(view, blocks):
+    d = app_dir()
+    tmp = os.path.join(d, ".view.tmp")
+    with open(tmp, "w") as f:
+        for b in blocks:
+            f.write(json.dumps(b, separators=(",", ":")) + "\n")
+    os.replace(tmp, os.path.join(d, "view.ndjson"))
+    tmp = os.path.join(d, ".meta.tmp")
+    with open(tmp, "w") as f:
+        json.dump({"title": "Files", "view": view}, f)
+    os.replace(tmp, os.path.join(d, "meta.json"))
+
+
+def human(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n / 1:.1f} {unit}"
+        n /= 1024
+    return f"{n:.0f} B"
+
+
+def when(ts):
+    days = (time.time() - ts) / 86400
+    if days < 1:
+        return "today"
+    if days < 2:
+        return "yesterday"
+    if days < 14:
+        return f"{int(days)} days ago"
+    return time.strftime("%-d %b", time.localtime(ts))
+
+
+def facts(path):
+    st = os.stat(path)
+    return human(st.st_size), when(st.st_mtime)
+
+
+def row_id(i, path):
+    """Ids are for addressing, not for reading — the title is the readable part."""
+    stem = "".join(c if c.isalnum() else "-" for c in os.path.basename(path).lower())
+    return f"{stem[:24].strip('-') or 'file'}-{i}"
+
+
+def first_match(path, pattern):
+    try:
+        with open(path, "r", errors="replace") as f:
+            for line in f:
+                if pattern.lower() in line.lower():
+                    return line.strip()[:SNIPPET]
+    except OSError:
+        return None
+    return None
+
+
+def search(pattern):
+    root = os.path.join(site(), "workspace")
+    hits = []
+    for base, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for n in sorted(names):
+            if n.startswith("."):
+                continue
+            p = os.path.join(base, n)
+            by_name = pattern.lower() in n.lower()
+            note = None if by_name else first_match(p, pattern)
+            if by_name or note:
+                hits.append((p, note))
+            if len(hits) >= MAX_MATCHES:
+                return hits
+    return hits
+
+
+def rel(path):
+    return os.path.relpath(path, site())
+
+
+def cmd_find(pattern):
+    hits = search(pattern)
+    if not hits:
+        write_view(f"no matches for {pattern}", [
+            {"kind": "heading", "text": f"Nothing matches “{pattern}”"},
+            {"kind": "prose", "text": "Nothing in `workspace/` has that in its name or "
+                                      "its text. Try a shorter word."},
+        ])
+        print(f"files: no matches for {pattern}")
+        return 0
+
+    items = []
+    for i, (path, note) in enumerate(hits):
+        size, modified = facts(path)
+        item = {
+            "id": row_id(i, path),
+            "title": os.path.basename(path),
+            "meta": f"{os.path.dirname(rel(path))} · {size} · {modified}",
+            "run": f"files show {rel(path)}",
+        }
+        if note:
+            item["note"] = note
+        items.append(item)
+
+    write_view(f"{len(items)} match{'' if len(items) == 1 else 'es'}", [
+        {"kind": "rows", "id": "matches", "items": items},
+    ])
+    print(f"files: {len(items)} match(es) for {pattern}, workspace open")
+    return 0
+
+
+def cmd_show(path):
+    full = path if os.path.isabs(path) else os.path.join(site(), path)
+    if not os.path.isfile(full):
+        die(f"no file at `{path}`.", "Paths are relative to the session root.")
+    size, modified = facts(full)
+    try:
+        with open(full, "r", errors="replace") as f:
+            head = "".join([next(f, "") for _ in range(40)])
+    except OSError as e:
+        die(f"could not read it ({e}).")
+
+    blocks = [
+        {"kind": "heading", "text": os.path.basename(full)},
+        {"kind": "fields", "items": [
+            {"label": "Path", "value": rel(full)},
+            {"label": "Size", "value": size},
+            {"label": "Modified", "value": modified},
+        ]},
+    ]
+    if head.strip():
+        blocks.append({"kind": "code", "text": head.rstrip()[:4000], "lang": "text"})
+    else:
+        blocks.append({"kind": "note", "text": "This file is empty.", "tone": "info"})
+    blocks.append({"kind": "rows", "id": "actions", "items": [
+        {"id": "back", "title": "Back to the matches", "meta": "the search results",
+         "run": "files list"},
+        # No `run`: this is the one that needs judgement, so it asks the agent.
+        {"id": "explain", "title": "Explain what this file is",
+         "meta": "asks the agent to read it properly"},
+    ]})
+    write_view(os.path.basename(full), blocks)
+    print(f"files: showing {rel(full)}")
+    return 0
+
+
+def cmd_list():
+    """The last search, redrawn. Kept so `Back` costs no turn either."""
+    last = os.path.join(app_dir(), ".last")
+    if not os.path.exists(last):
+        die("there is no search to go back to.", "Run `files find <pattern>` first.")
+    with open(last) as f:
+        return cmd_find(f.read().strip())
+
+
+def remember(pattern):
+    with open(os.path.join(app_dir(), ".last"), "w") as f:
+        f.write(pattern)
+
+
+USAGE = """files — search and read this session's workspace, and draw the result.
+
+  files find <pattern>     search names and contents, and open the workspace
+  files show <path>        one file: its facts and the first of its text
+  files list               the last search again
+
+Each command writes ui/apps/files/ itself. See the recipe beside this program
+for what the views look like and when a workspace is the wrong answer."""
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+    if argv[0] == "--self-test":
+        print("files: ok")
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    if cmd == "find" and len(rest) == 1:
+        remember(rest[0])
+        return cmd_find(rest[0])
+    if cmd == "show" and len(rest) == 1:
+        return cmd_show(rest[0])
+    if cmd == "list" and not rest:
+        return cmd_list()
+    die(f"do not understand `{' '.join(argv)}`.", "", *USAGE.splitlines())
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]) or 0)
