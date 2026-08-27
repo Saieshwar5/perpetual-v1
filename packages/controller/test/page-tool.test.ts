@@ -54,6 +54,57 @@ const read = async (root: string, id = PAGE) =>
 
 const ids = (blocks: { id?: string }[]) => blocks.map((b) => b.id);
 
+/* ------------------------------------------------------- appending safely */
+
+test("append puts the block above the doors, where `cat >>` would break the page", async () => {
+  const root = await site();
+  const r = await page(root, "append", PAGE,
+    '{"kind":"prose","id":"caveat","text":"Q2 is provisional."}');
+  assert.equal(r.code, 0, r.err);
+  const after = await read(root);
+  assert.deepEqual(ids(after),
+    ["claim", "lead", "numbers", "how", "by-quarter", "caveat", "doors"]);
+  assert.equal(after.at(-1)!.kind, "next", "the doors are still where the page hands over");
+  assert.match(r.out, /above the doors/, "and it says so, so the agent learns the rule");
+});
+
+test("append on a page with no doors is simply the end", async () => {
+  const root = await site(START.slice(0, 5));
+  await page(root, "append", PAGE, '{"kind":"prose","id":"tail","text":"One more thing."}');
+  assert.deepEqual(ids(await read(root)),
+    ["claim", "lead", "numbers", "how", "by-quarter", "tail"]);
+});
+
+test("appending doors of your own puts them last, not above the old ones", async () => {
+  const root = await site(START.slice(0, 3));
+  await page(root, "append", PAGE, '{"kind":"next","id":"doors","items":["And then?"]}');
+  const after = await read(root);
+  assert.equal(after.at(-1)!.kind, "next");
+});
+
+test("append refuses a name that is already taken", async () => {
+  const root = await site();
+  const r = await page(root, "append", PAGE, '{"kind":"prose","id":"lead","text":"Twice."}');
+  assert.equal(r.code, 2);
+  assert.match(r.err, /already the name of another block/);
+  assert.deepEqual(ids(await read(root)), ids(START), "and the page is untouched");
+});
+
+test("append refuses an unnamed block on a fully named page", async () => {
+  const root = await site();
+  const r = await page(root, "append", PAGE, '{"kind":"prose","text":"No name."}');
+  assert.equal(r.code, 2);
+  assert.match(r.err, /all-or-nothing/);
+});
+
+test("unquoted JSON on append is named as the shell splitting it", async () => {
+  const root = await site();
+  const r = await page(root, "append", PAGE, '{"kind":"prose",', 'text:"split"}');
+  assert.equal(r.code, 2);
+  assert.match(r.err, /split by the shell/);
+  assert.match(r.err, /page append <page> '/);
+});
+
 /* ------------------------------------------------- the scenario that broke */
 
 test("replacing a block keeps its position — the whole reason this exists", async () => {

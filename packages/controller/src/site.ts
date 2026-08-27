@@ -254,15 +254,17 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
     problems.push({
       page: id,
       message: "the `next` block is not the last block. It is what the reader sees " +
-               "when they have finished reading, so it belongs at the end.",
+               "when they have finished reading, so it belongs at the end. If you " +
+               "were adding to a section that already had doors, use `page append " +
+               "<page> '<json>'` — it puts the block above them for you.",
     });
   }
 
   if (blocks.length > MAX_BLOCKS) {
     problems.push({
       page: id,
-      message: `${blocks.length} blocks is too many for one page (max ${MAX_BLOCKS}). ` +
-               "Split it into a second page — pages are cheap, long pages are not.",
+      message: `${blocks.length} blocks is too many for one section (max ${MAX_BLOCKS}). ` +
+               "Split it — sections are cheap, and one that long dominates the scroll.",
     });
   }
 

@@ -210,6 +210,36 @@ def cmd_insert(page, block_id, raw, where):
        f"at position {at} · {len(blocks)} blocks")
 
 
+def cmd_append(page, raw):
+    """Add a block at the end — but never below a trailing `next`.
+
+    THE TRAP THIS EXISTS FOR. A page may hold one `next` block and it must be
+    the LAST block: it is where the page hands over. So the moment a page has
+    doors, `cat >> page.ndjson` — the way every page is written in the first
+    place — puts the new block underneath them and the page is rejected. That
+    is a rule the agent obeyed correctly when it wrote the page and then broke
+    by using the same command a turn later, which is the worst kind of rule.
+
+    Extending a section in place is now the normal move rather than a rare
+    one, so this hits constantly. `append` is the same gesture with the rule
+    already in it: the doors stay at the foot, and nothing has to be
+    remembered.
+    """
+    blocks = read_blocks(page)
+    b = parse_block(raw)
+    require_id_if_named(page, blocks, b)
+    if b.get("id"):
+        check_new_id(page, blocks, b["id"])
+    at = len(blocks)
+    if blocks and blocks[-1].get("kind") == "next" and b.get("kind") != "next":
+        at = len(blocks) - 1
+    blocks.insert(at, b)
+    write_blocks(page, blocks)
+    tail = " (above the doors)" if at != len(blocks) - 1 else ""
+    ok(f"{page} · appended `{b.get('id') or b['kind']}` at position {at}{tail} "
+       f"· {len(blocks)} blocks")
+
+
 def cmd_rm(page, block_id):
     blocks = read_blocks(page)
     i = find(page, blocks, block_id)
@@ -297,6 +327,7 @@ def cmd_split(page, from_id, into, title):
 USAGE = """page — edit a page you have already written, by block name.
 
   page ls     <page>
+  page append <page> '<json>'               add at the end, above any doors
   page set    <page> <id> '<json>'          replace that block, in place
   page after  <page> <id> '<json>'          insert after that block
   page before <page> <id> '<json>'          insert before that block
@@ -310,8 +341,10 @@ The block JSON goes in SINGLE quotes, or pass `-` to read it from stdin:
   {"kind":"prose","id":"lead","text":"It doesn't fit in single quotes."}
   JSON
 
-Appending is still just `cat >> ui/pages/<page>/page.ndjson`, and creating a
-page is still mkdir plus meta.json. This is only for changing what is there."""
+Creating a page is still mkdir plus meta.json, and writing a NEW one is still
+`cat >> ui/pages/<page>/page.ndjson`. Use `append` once a page has a `next`
+block: `cat >>` would put your block below the doors, and a page whose doors
+are not last is rejected."""
 
 
 def main(argv):
@@ -322,6 +355,8 @@ def main(argv):
     try:
         if cmd == "ls" and len(rest) == 1:
             return cmd_ls(*rest)
+        if cmd == "append" and len(rest) == 2:
+            return cmd_append(*rest)
         if cmd == "set" and len(rest) == 3:
             return cmd_set(*rest)
         if cmd in ("after", "before") and len(rest) == 3:
@@ -337,12 +372,15 @@ def main(argv):
     # Almost always the same mistake: unquoted JSON, which the shell splits on
     # spaces and strips the quotes from. Worth naming, because the generic
     # usage dump does not tell the agent what it actually did wrong.
-    if cmd in ("set", "after", "before") and len(rest) > 3:
+    if (cmd in ("set", "after", "before") and len(rest) > 3) \
+            or (cmd == "append" and len(rest) > 2):
+        args = len(rest) - (1 if cmd == "append" else 2)
         die("the block JSON was split by the shell.",
-            "It arrived as " + str(len(rest) - 2) + " separate arguments, which means it",
+            "It arrived as " + str(args) + " separate arguments, which means it",
             "was not quoted. Wrap it in single quotes:",
             "",
-            "  page " + cmd + " <page> <id> '{\"kind\":\"prose\",\"text\":\"…\"}'",
+            "  page " + cmd + (" <page> " if cmd == "append" else " <page> <id> ")
+            + "'{\"kind\":\"prose\",\"text\":\"…\"}'",
             "",
             "or pass `-` and give it on stdin with a heredoc.")
     die(f"do not understand `{' '.join(argv)}`.", "", *USAGE.splitlines())

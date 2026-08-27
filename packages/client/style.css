@@ -349,28 +349,37 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* --------------------------------------------------------------- blocks */
 
+/* A SIGNPOST, not a cover.
+   2.3em was the right size when a page was a room you landed on: the claim sat
+   alone on an otherwise empty screen and had to carry the whole of it. In one
+   scroll it is something you pass on the way down, with a seam above it already
+   announcing that a new section has started — one job being done by three
+   mechanisms, at title-page size, in a stream. */
 .doc h1 {
-  font-family: var(--serif); font-weight: 500; font-size: 2.3em;
-  line-height: 1.18; letter-spacing: -.02em; text-wrap: balance;
-  margin-top: 0; margin-bottom: 1.1rem;
+  font-family: var(--serif); font-weight: 500; font-size: 1.7em;
+  line-height: 1.22; letter-spacing: -.02em; text-wrap: balance;
+  margin-top: 0; margin-bottom: 1rem;
 }
 
-/* A section break, not a second headline. Much more space above than below,
-   so it binds to the text it introduces rather than floating between two
-   paragraphs — and a hairline, so a long page reads as movements. */
+/* A section break, not a second headline. Much more space above than below, so
+   it binds to the text it introduces rather than floating between two
+   paragraphs.
+
+   The hairline it used to carry is gone. Sections are now separated by a seam
+   of their own, and a rule here as well put two dividers in a row arguing about
+   which break mattered — space says it, and says it more quietly. */
 .doc h2 {
-  font-family: var(--serif); font-weight: 500; font-size: 1.32em;
-  line-height: 1.3; letter-spacing: -.01em; text-wrap: balance;
-  margin-top: 2.8rem; margin-bottom: .9rem;
-  padding-top: 1.5rem; border-top: 1px solid var(--line);
+  font-family: var(--serif); font-weight: 500; font-size: 1.22em;
+  line-height: 1.35; letter-spacing: -.01em; text-wrap: balance;
+  margin-top: 2.4rem; margin-bottom: .8rem;
 }
-.doc h1 + h2 { margin-top: 1.4rem; padding-top: 0; border-top: 0; }
+.doc h1 + h2 { margin-top: 1.4rem; }
 
 /* The lead. The first paragraph after the claim carries the summary — the
    agent already writes it that way without being asked, so the renderer can
    set it without adding anything to the vocabulary. */
 .doc h1 + p {
-  font-size: 1.19em; line-height: 1.62; color: var(--ink-2);
+  font-size: 1.11em; line-height: 1.62; color: var(--ink-2);
   text-wrap: pretty; margin-bottom: 1.5rem;
 }
 .doc p {
@@ -488,7 +497,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   :root { --gutter: 20px; }
   .split { grid-template-columns: 1fr; }
   .panel:first-child .doc { padding-top: 5vh; }
-  .doc h1 { font-size: 1.95em; }
+  .doc h1 { font-size: 1.5em; }
 }
 
 /* ----------------------------------------------------------- composer */
@@ -673,19 +682,23 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .doc.lay-column { }                                    /* the default page */
 
-/* These used to differ by how far components BROKE OUT of the reading measure.
-   There is no measure to break out of now, so a wider page is simply a wider
-   page: text and figures widen together instead of one leaving the other
-   behind. The composer keeps the default column on these — it lives outside
-   the page and cannot see which layout the page chose — so on a wide page it
-   is narrower than the text rather than misaligned with it. */
-.doc.lay-wide { --page: calc(64rem * var(--type)); }
+/* ONE WIDTH FOR THE WHOLE SITE. The layout modes used to set their own page
+   caps — 64rem for wide, 72rem for split, 66rem for gallery, against a 54rem
+   default — and in a deck that was invisible: one page filled the screen at a
+   time, so no two widths were ever seen together. In one scroll they are
+   adjacent, and a 72rem section directly above a 54rem one reads as a bug. It
+   is the same complaint that made columns a decision about the SITE rather
+   than about a page, arriving on the width axis.
 
-/* The one layout that is still an arrangement rather than a width: prose down
-   the left, figures down the right. The tracks are fractions now, not a fixed
-   reading measure, so the prose track scales with the page like everything
-   else. Below the breakpoint it stacks and the fractions never apply. */
-.doc.lay-split { --page: calc(72rem * var(--type)); }
+   So a mode now changes the ARRANGEMENT inside the section and never its
+   width. `wide` keeps its name for the agent's sake — it asks for more room and
+   is given the same room as everything else, which is the honest answer in a
+   site with one measure. There is deliberately no `.doc.lay-wide` rule left:
+   the mode is accepted, validated and then styled like everything else. */
+
+/* Prose down the left, figures down the right. The tracks are fractions, so
+   they divide whatever width the site has. Below the breakpoint it stacks and
+   the fractions never apply. */
 @media (min-width: 1100px) {
   .doc.lay-split {
     display: grid;
@@ -699,9 +712,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
   .doc.lay-split > .tablewrap { grid-column: 2; }
 }
 
-/* Figures at full width, prose between them as connective tissue. Wider than
-   the default page because the figures are the point of this one. */
-.doc.lay-gallery { --page: calc(66rem * var(--type)); }
+/* Figures at full width, prose between them as connective tissue. Bigger
+   figures, not a bigger page. */
 .doc.lay-gallery > .figure { margin-bottom: 2.4rem; }
 .doc.lay-gallery > .figure .svgwrap { padding: 28px; }
 
