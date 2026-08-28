@@ -122,6 +122,13 @@ export function createShell(cfg: SandboxConfig, broker?: Broker) {
               process.env.PATH ?? "/usr/bin:/bin"].join(":"),
             HOME: cfg.root,
             PERPETUAL_SITE: cfg.root,
+            // No bwrap here, so no mounts: the wrapper is told where the real
+            // binary actually is rather than where it would have been bound.
+            ...(cfg.unlocked ? {
+              PERPETUAL_GWS_HOST: cfg.unlocked.bin,
+              GOOGLE_WORKSPACE_CLI_CONFIG_DIR: cfg.unlocked.configDir,
+              GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file",
+            } : {}),
             ...(req.env ?? {}),
           }
         : { PATH: process.env.PATH ?? "/usr/bin:/bin" },

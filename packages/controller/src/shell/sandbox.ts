@@ -20,6 +20,7 @@
  *      lacks it, which is exactly the machine where it matters.
  */
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -53,11 +54,47 @@ export const toolsDir = () =>
 export const ADAPTERS_MOUNT = "/opt/perpetual/tools";
 export const LOCAL_ADAPTERS_MOUNT = "/opt/perpetual/tools.local";
 
+/**
+ * Where an UNLOCKED host program appears, and its credential beside it.
+ *
+ * This is the escape hatch of plans/36, and it is the exception to everything
+ * above: a real binary from the host, with a real Google credential, inside the
+ * namespace. While it is on there is no enforcement left — the agent can send
+ * and delete mail, and can do so because a message it read told it to.
+ *
+ * It exists because a verb table written from imagination is wrong, and the way
+ * to write a right one is to watch the agent use the real CLI. Off by default,
+ * refused unless asked for by name, and loud in the chrome whenever it is on.
+ *
+ * NOT on the PATH: the journaling wrapper that adapters/gws ships is what the
+ * agent finds when it types `gws`. That wrapper is a record, not a gate — the
+ * absolute path still works, and it is meant to.
+ */
+export const HOST_MOUNT = "/opt/perpetual/host";
+export const GWS_CONFIG_MOUNT = "/opt/perpetual/gws-config";
+
+export interface Unlocked {
+  /** What was unlocked. Named, so the next one cannot ride in on this one. */
+  what: "gws";
+  /** Host path to the real binary. */
+  bin: string;
+  /** Host path to its credential directory. Writable: gws caches tokens. */
+  configDir: string;
+}
+
 export interface SandboxConfig {
   /** Real path to the session's `site/` directory. */
   root: string;
   /** Grant network access to this session. Off by default. */
   net: boolean;
+  /**
+   * A host CLI mounted in with its credential, for testing. plans/36.
+   *
+   * Never inferred: it takes its own switch, and it does not imply `net` even
+   * though it is useless without it. Two switches means neither is flipped by
+   * accident.
+   */
+  unlocked?: Unlocked;
   /** Set by PERPETUAL_UNSAFE=1. Development only; never a fallback. */
   unsafe: boolean;
   /** Real path to the built-in adapters, when there are any. */
@@ -105,8 +142,18 @@ export function bwrapAvailable(): boolean {
  * inside the sandbox even by `env`. Verified by a test, because the failure is
  * silent and total.
  */
-export function sandboxEnv(mount: string, adapterBins: string[] = []): Record<string, string> {
+export function sandboxEnv(
+  mount: string, adapterBins: string[] = [], unlocked?: Unlocked,
+): Record<string, string> {
   return {
+    ...(unlocked ? {
+      GOOGLE_WORKSPACE_CLI_CONFIG_DIR: GWS_CONFIG_MOUNT,
+      // There is no session bus in here, and there should not be one. The file
+      // backend uses the key already beside the credentials.
+      GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file",
+      // Read by the journaling wrapper that adapters/gws puts on the PATH.
+      PERPETUAL_GWS_HOST: `${HOST_MOUNT}/gws`,
+    } : {}),
     // An adapter's `bin/` is on the PATH, so a recipe can say `mail list`
     // rather than a path — the scripts ARE the tool, as far as the agent is
     // concerned.
@@ -164,6 +211,33 @@ export function ulimits(cfg: SandboxConfig): string {
 }
 
 /**
+ * Make DNS work when the network is on.
+ *
+ * `/etc` is bind-mounted read-only, which brings `/etc/resolv.conf` with it —
+ * but on a systemd-resolved machine that is a SYMLINK into /run, and /run is
+ * not in the namespace. So it arrives dangling: the network was on, every
+ * hostname failed to resolve, and the error surfaced as "error sending
+ * request" from whatever was trying to make one.
+ *
+ * Binding the target AT ITS OWN PATH is what works, and the reason is worth
+ * writing down: mounting over `/etc/resolv.conf` silently does nothing, because
+ * the destination is a dangling symlink and there is nothing there to mount
+ * onto. Put the real file where the symlink is already pointing and it
+ * resolves. Binding its directory rather than the file also brings the
+ * resolver's own socket, which is what `nsswitch.conf` reaches for first.
+ *
+ * `--ro-bind-try` because a machine laid out differently should still get a
+ * sandbox — just one that cannot look anything up, which is what it had before.
+ */
+function resolverBinds(): string[] {
+  let real: string;
+  try { real = realpathSync("/etc/resolv.conf"); } catch { return []; }
+  if (real === "/etc/resolv.conf") return [];         // a real file, already in /etc
+  const dir = dirname(real);
+  return ["--ro-bind-try", dir, dir];
+}
+
+/**
  * Build the argv that runs `script` under containment.
  *
  * `extra` is per-run environment — a workspace form's values, which reach the
@@ -179,7 +253,7 @@ export function wrapCommand(
   const args = [
     "--die-with-parent",
     "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",
-    ...(cfg.net ? [] : ["--unshare-net"]),
+    ...(cfg.net ? resolverBinds() : ["--unshare-net"]),
     "--clearenv",
     // Read-only system. /bin, /lib, /sbin are symlinks into /usr on modern
     // distros; recreating them keeps shebangs like #!/bin/sh working.
@@ -202,6 +276,15 @@ export function wrapCommand(
     // local tools directory into "Can't find source path".
     ...(cfg.adapters ? ["--ro-bind-try", cfg.adapters, ADAPTERS_MOUNT] : []),
     ...(cfg.localAdapters ? ["--ro-bind-try", cfg.localAdapters, LOCAL_ADAPTERS_MOUNT] : []),
+    // The escape hatch. The BINARY, not the directory it sits in: a directory
+    // bind would put an installer script and a package manifest in reach for
+    // no reason. Its credential directory is writable because gws caches
+    // refreshed tokens — which is also why a credential exposed this way
+    // should be treated as spent.
+    ...(cfg.unlocked
+      ? ["--ro-bind", cfg.unlocked.bin, `${HOST_MOUNT}/gws`,
+         "--bind", cfg.unlocked.configDir, GWS_CONFIG_MOUNT]
+      : []),
     // The one writable path.
     "--bind", cfg.root, MOUNT,
     // …with the published sections mounted read-only over themselves. Order
@@ -210,7 +293,7 @@ export function wrapCommand(
     ...sealedBinds(cfg),
     "--chdir", MOUNT,
   ];
-  for (const [k, v] of Object.entries(sandboxEnv(MOUNT, cfg.binPaths ?? []))) {
+  for (const [k, v] of Object.entries(sandboxEnv(MOUNT, cfg.binPaths ?? [], cfg.unlocked))) {
     args.push("--setenv", k, v);
   }
   for (const [k, v] of Object.entries(extra)) {
@@ -243,6 +326,11 @@ export function describeSandbox(cfg: SandboxConfig): string {
   const sealed = cfg.sealed?.length
     ? ` · ${cfg.sealed.length} published section${cfg.sealed.length === 1 ? "" : "s"} read-only`
     : "";
-  if (cfg.unsafe) return `UNSANDBOXED (PERPETUAL_UNSAFE=1)${sealed}`;
-  return `bubblewrap · ${cfg.net ? "network ON" : "no network"} · writable: ${MOUNT}${sealed}`;
+  // Loud, and first: an unlocked session that reads like a locked one is the
+  // actual danger. The mistake is never "the agent sent mail", it is "nobody
+  // knew it could".
+  const open = cfg.unlocked ? `${cfg.unlocked.what.toUpperCase()} UNLOCKED · ` : "";
+  if (cfg.unsafe) return `${open}UNSANDBOXED (PERPETUAL_UNSAFE=1)${sealed}`;
+  return `${open}bubblewrap · ${cfg.net ? "network ON" : "no network"} · ` +
+    `writable: ${MOUNT}${sealed}`;
 }

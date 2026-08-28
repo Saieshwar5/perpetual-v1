@@ -1371,6 +1371,9 @@ $("badge").textContent = health.replay ? "replay" : health.provider ?? "model";
 $("model").textContent = health.replay ? "scripted" : health.model.split("/").pop() ?? health.model;
 $("model").title = `${health.model} — set by PERPETUAL_MODEL; changing it needs a restart`;
 $("sandbox").textContent = health.sandbox;
+// Chrome is the zone the agent cannot render or fake, which is exactly why an
+// unlocked session has to be visible HERE and not in anything it writes.
+$("sandbox").classList.toggle("unlocked", health.sandbox.includes("UNLOCKED"));
 // Replay stamps the whole sidebar, not a chip. A subtle badge already cost a
 // whole evaluation once — a full-height edge cannot be read past.
 sideHost.classList.toggle("replay", health.replay);

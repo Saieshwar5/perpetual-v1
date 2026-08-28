@@ -20,6 +20,8 @@ import { readSite } from "./site.ts";
 import { readApps, commandFor, fieldEnv, APPS_REL } from "./apps.ts";
 import { readAdapters, adaptersDir, type Adapter } from "./adapters.ts";
 import { Broker, credential, READ_PROFILE } from "./broker.ts";
+import { resolveUnlocked, unlockBanner } from "./unlocked.ts";
+import type { Unlocked } from "./shell/sandbox.ts";
 import { createShell } from "./shell/tool.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
@@ -119,6 +121,14 @@ let HAS_LOCAL_ADAPTERS = false;
 let ADAPTERS: Adapter[] = [];
 /** Which Google credential mail would run against, or null when there is none. */
 let MAIL_CREDENTIAL: string | null = null;
+/**
+ * The escape hatch, resolved once at boot. plans/36.
+ *
+ * `undefined` is the normal state and means locked. It is deliberately not a
+ * per-session or per-turn decision: what the sandbox contains is harness
+ * config, and the model must not be able to ask its way into it.
+ */
+let UNLOCKED: Unlocked | undefined;
 
 /**
  * One broker for the server, listening per session only while a command runs.
@@ -130,6 +140,7 @@ const BROKER = new Broker();
 
 const sandboxFor = (id: string, sealed: string[] = []): SandboxConfig => ({
   root: store.siteDir(id), net: NET, unsafe: UNSAFE, sealed,
+  ...(UNLOCKED ? { unlocked: UNLOCKED } : {}),
   adapters: adaptersDir(),
   ...(HAS_LOCAL_ADAPTERS ? { localAdapters: LOCAL_ADAPTERS } : {}),
   binPaths: ADAPTERS.filter((a) => a.hasBin).map((a) => `${a.path}/bin`),
@@ -426,7 +437,9 @@ const server = createServer(async (req, res) => {
         provider: REPLAY ? "replay" : PROVIDER,
         hasKey: REPLAY || Boolean(API_KEY),
         replay: REPLAY,
-        sandbox: describeSandbox({ root: "", net: NET, unsafe: UNSAFE }),
+        sandbox: describeSandbox({
+          root: "", net: NET, unsafe: UNSAFE, ...(UNLOCKED ? { unlocked: UNLOCKED } : {}),
+        }),
         root: ROOT,
       });
     }
@@ -492,6 +505,15 @@ server.on("error", (e: NodeJS.ErrnoException) => {
 // an adapter with a broken manifest is one the agent will never be told about,
 // which looks exactly like an adapter that was never installed.
 {
+  // Before anything else, and a refusal rather than a downgrade: a session that
+  // quietly fell back to locked is one where the test results mean nothing.
+  const unlock = await resolveUnlocked();
+  if (unlock && "error" in unlock) {
+    console.error(`\n  ${unlock.error}\n`);
+    process.exit(1);
+  }
+  UNLOCKED = unlock?.unlocked;
+
   HAS_LOCAL_ADAPTERS = await stat(LOCAL_ADAPTERS).then((s) => s.isDirectory(), () => false);
   const { adapters, problems } = await readAdapters(
     HAS_LOCAL_ADAPTERS ? LOCAL_ADAPTERS : undefined);
@@ -505,11 +527,12 @@ server.on("error", (e: NodeJS.ErrnoException) => {
   const cred = await credential();
   MAIL_CREDENTIAL = "error" in cred ? null
     : cred.readOnly ? "read-only profile" : "PERPETUAL_GWS_CONFIG_DIR override";
-  if ("error" in cred) {
-    for (const a of ADAPTERS) {
-      if (a.needs.includes("broker:mail")) {
-        a.unavailable = "no read-only Google credential is set up on this machine";
-      }
+  for (const a of ADAPTERS) {
+    if ("error" in cred && a.needs.includes("broker:mail")) {
+      a.unavailable = "no read-only Google credential is set up on this machine";
+    }
+    if (!UNLOCKED && a.needs.includes("unlocked")) {
+      a.unavailable = "this session is locked — the tool is not mounted";
     }
   }
 }
@@ -520,10 +543,13 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`  model     ${runtime?.modelId ?? runtimeError ?? "unavailable"}`);
   console.log(`  key       ${REPLAY ? "replay mode (no key needed)"
     : API_KEY ? `${KEY_ENV} set` : `${KEY_ENV} NOT SET — /turn will 503`}`);
-  console.log(`  sandbox   ${describeSandbox({ root: "", net: NET, unsafe: UNSAFE })}`);
+  console.log(`  sandbox   ${describeSandbox({
+    root: "", net: NET, unsafe: UNSAFE, ...(UNLOCKED ? { unlocked: UNLOCKED } : {}),
+  })}`);
   console.log(`  sessions  ${ROOT}`);
   console.log(`  mail      ${MAIL_CREDENTIAL ?? `unavailable — no credential at ${READ_PROFILE}`}`);
   console.log(`  tools     ${ADAPTERS.length
     ? ADAPTERS.map((a) => a.name + (a.local ? "*" : "")).join(", ")
     : "none"}\n`);
+  if (UNLOCKED) console.log(unlockBanner(UNLOCKED, NET));
 });
