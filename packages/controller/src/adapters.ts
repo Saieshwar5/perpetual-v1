@@ -214,10 +214,15 @@ export async function readAdapters(localDir?: string): Promise<{
  */
 export function describeAdapters(adapters: Adapter[]): string | null {
   if (!adapters.length) return null;
+  // Needs are shown only when they are NOT met. A satisfied dependency is
+  // noise, and worse than noise: `gws (either) … [needs unlocked]` on a session
+  // that IS unlocked reads as a tool that cannot be used.
   const list = adapters
     .map((a) => `  ${a.name} (${a.surface}) — ${a.summary}${
-      a.unavailable ? `  [UNAVAILABLE: ${a.unavailable}]`
-        : a.needs.length ? `  [needs ${a.needs.join(", ")}]` : ""}`)
+      a.unavailable
+        ? `  [UNAVAILABLE: ${a.unavailable}${
+            a.needs.length ? `; needs ${a.needs.join(", ")}` : ""}]`
+        : ""}`)
     .join("\n");
   return `\nTools installed here:\n${list}\n` +
     "Before using one, read its recipe — `cat " +

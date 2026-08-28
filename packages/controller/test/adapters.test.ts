@@ -121,7 +121,11 @@ test("the turn message gets names and shapes — never the recipes", async () =>
   const line = describeAdapters(adapters)!;
 
   assert.match(line, /mail \(workspace\) — read and reply to mail/);
-  assert.match(line, /\[needs credential:gmail, net\]/);
+  // A met dependency says nothing; an unmet one says both.
+  assert.doesNotMatch(line, /needs/, "nothing here has been marked unavailable");
+  const blocked = describeAdapters(
+    adapters.map((a) => ({ ...a, unavailable: "no credential" })))!;
+  assert.match(blocked, /\[UNAVAILABLE: no credential; needs credential:gmail, net\]/);
   assert.match(line, /cat \/opt\/perpetual\/tools/, "it says where to read the rest");
   assert.doesNotMatch(line, /# Mail/, "the recipe stays on disk");
   assert.ok(line.length < 1200, "an index that grows like a prompt is not an index");
@@ -138,7 +142,7 @@ test("the built-in adapters are readable, and say what they are", async () => {
   const { adapters, problems } = await readAdapters();
   assert.deepEqual(problems, []);
   const names = adapters.map((a) => a.name);
-  assert.deepEqual(names, ["files", "git", "mail"]);
+  assert.deepEqual(names, ["files", "git", "gws", "mail"]);
 
   const files = adapters.find((a) => a.name === "files")!;
   assert.equal(files.surface, "workspace");

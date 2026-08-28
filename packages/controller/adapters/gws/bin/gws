@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""gws — the real Google Workspace CLI, with every invocation written down.
+
+This is a wrapper, not a gate. It refuses nothing, changes no arguments, and
+hands off to the real binary with exec so the exit code and the streaming are
+exactly what they would have been. What it adds is a line in ui/requests/ —
+because "what did the agent do to my mailbox" is precisely the question a test
+session exists to answer, and a transcript is not an answer.
+
+The absolute path still works and is meant to: see plans/36 §5. Anyone routing
+around this wrapper is not defeating a defence, they are just declining to be
+recorded.
+"""
+import json
+import os
+import sys
+import time
+
+# Where the real binary is. The mount is the normal answer; the environment
+# carries it in PERPETUAL_UNSAFE=1 sessions, which have no mounts at all.
+HOST = os.environ.get("PERPETUAL_GWS_HOST") or "/opt/perpetual/host/gws"
+LOCKED = """gws: this session is locked, so the Google Workspace CLI is not mounted.
+
+That is the normal state. Mail is available through the `mail` adapter, which
+reads through a broker outside the sandbox — `cat /opt/perpetual/tools/mail/tool.md`.
+
+Say that reading is what this session can do. Do not look for another route."""
+
+# Arguments that carry a secret rather than a subject. `gws auth export` prints
+# a decrypted credential; recording its output was never on the table, but the
+# command itself is worth knowing about.
+SECRET_FLAGS = {"--token", "--client-secret", "--password"}
+MAX_ARG = 200
+
+
+def journal(argv):
+    site = os.environ.get("PERPETUAL_SITE") or os.environ.get("HOME")
+    if not site:
+        return
+    d = os.path.join(site, "ui", "requests")
+    try:
+        os.makedirs(d, exist_ok=True)
+        n = 0
+        for f in os.listdir(d):
+            head = f.split(".", 1)[0]
+            if head.isdigit():
+                n = max(n, int(head))
+        clean, redact = [], False
+        for a in argv:
+            if redact:
+                clean.append("<redacted>")
+                redact = False
+                continue
+            redact = a in SECRET_FLAGS
+            clean.append(a if len(a) <= MAX_ARG else a[:MAX_ARG] + "…")
+        entry = {
+            "n": n + 1,
+            "verb": "gws.direct",
+            "argv": clean,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "note": "PERPETUAL_UNLOCKED=gws — ran outside the verb table",
+        }
+        # Two writers share this directory (the broker journals here too), so a
+        # taken name is a retry rather than an overwrite.
+        for bump in range(20):
+            path = os.path.join(d, f"{entry['n'] + bump:03d}.json")
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            except FileExistsError:
+                continue
+            entry["n"] += bump
+            with os.fdopen(fd, "w") as f:
+                json.dump(entry, f, indent=2)
+                f.write("\n")
+            return
+    except OSError:
+        # A journal that cannot be written must not stop the command. The
+        # recording is a convenience; the switch is the thing that was granted.
+        pass
+
+
+def main():
+    if not os.path.exists(HOST):
+        print(LOCKED, file=sys.stderr)
+        return 2
+    journal(sys.argv[1:])
+    try:
+        os.execv(HOST, [HOST] + sys.argv[1:])
+    except OSError as e:
+        print(f"gws: could not run the mounted binary ({e}).", file=sys.stderr)
+        return 127
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

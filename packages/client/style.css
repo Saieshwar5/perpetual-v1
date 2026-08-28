@@ -253,6 +253,13 @@ html[data-side="min"] .srow { justify-content: center; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 96px;
 }
 .chip.spent { color: var(--accent); border-color: var(--accent-sf); }
+/* An unlocked session has a real credential and can write to a real mailbox.
+   The danger was never "the agent sent mail" — it is "nobody knew it could",
+   so this reads as a warning rather than as one more grey fact. */
+.chip.unlocked {
+  color: var(--warn); border-color: var(--warn); background: var(--warn-sf);
+  max-width: 132px; font-weight: 600;
+}
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-2); }
 
 /* ---------------------------------------------------- the flow and its sections */
