@@ -42,6 +42,17 @@ export const TOOLS_MOUNT = "/opt/perpetual/bin";
 export const toolsDir = () =>
   join(dirname(fileURLToPath(import.meta.url)), "..", "..", "sandbox-bin");
 
+/**
+ * Tool adapters: a recipe per CLI, and the scripts that go with it.
+ *
+ * Same treatment as the programs above — read-only, outside the one writable
+ * path — for the same reason. An adapter says what a tool is for and how its
+ * UI should look; an adapter the agent could edit would be an instruction it
+ * writes to itself.
+ */
+export const ADAPTERS_MOUNT = "/opt/perpetual/tools";
+export const LOCAL_ADAPTERS_MOUNT = "/opt/perpetual/tools.local";
+
 export interface SandboxConfig {
   /** Real path to the session's `site/` directory. */
   root: string;
@@ -49,6 +60,17 @@ export interface SandboxConfig {
   net: boolean;
   /** Set by PERPETUAL_UNSAFE=1. Development only; never a fallback. */
   unsafe: boolean;
+  /** Real path to the built-in adapters, when there are any. */
+  adapters?: string;
+  /** Real path to the reader's own adapters, when they have some. */
+  localAdapters?: string;
+  /**
+   * The `bin/` of each adapter that ships scripts, in sandbox coordinates and
+   * in PATH order. Resolved by the caller from the registry, because PATH
+   * does not expand globs — a wildcard entry would silently be one that never
+   * matches anything.
+   */
+  binPaths?: string[];
   /**
    * Section ids that are PUBLISHED, and therefore read-only for this turn.
    *
@@ -83,9 +105,12 @@ export function bwrapAvailable(): boolean {
  * inside the sandbox even by `env`. Verified by a test, because the failure is
  * silent and total.
  */
-export function sandboxEnv(mount: string): Record<string, string> {
+export function sandboxEnv(mount: string, adapterBins: string[] = []): Record<string, string> {
   return {
-    PATH: `${TOOLS_MOUNT}:/usr/local/bin:/usr/bin:/bin`,
+    // An adapter's `bin/` is on the PATH, so a recipe can say `mail list`
+    // rather than a path — the scripts ARE the tool, as far as the agent is
+    // concerned.
+    PATH: [TOOLS_MOUNT, ...adapterBins, "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
     HOME: mount,
     LANG: "C.UTF-8",
     TERM: "dumb",
@@ -169,6 +194,14 @@ export function wrapCommand(
     "--tmpfs", "/tmp",
     // The agent's own programs: read-only, and outside the writable path.
     "--ro-bind", toolsDir(), TOOLS_MOUNT,
+    // The adapters, likewise. Recipes and their scripts are configuration.
+    //
+    // `--ro-bind-try`, not `--ro-bind`: the reader's own adapter directory
+    // usually does not exist, and bwrap refuses to start at all when a bind
+    // source is missing. That turned every command in a session without a
+    // local tools directory into "Can't find source path".
+    ...(cfg.adapters ? ["--ro-bind-try", cfg.adapters, ADAPTERS_MOUNT] : []),
+    ...(cfg.localAdapters ? ["--ro-bind-try", cfg.localAdapters, LOCAL_ADAPTERS_MOUNT] : []),
     // The one writable path.
     "--bind", cfg.root, MOUNT,
     // …with the published sections mounted read-only over themselves. Order
@@ -177,7 +210,9 @@ export function wrapCommand(
     ...sealedBinds(cfg),
     "--chdir", MOUNT,
   ];
-  for (const [k, v] of Object.entries(sandboxEnv(MOUNT))) args.push("--setenv", k, v);
+  for (const [k, v] of Object.entries(sandboxEnv(MOUNT, cfg.binPaths ?? []))) {
+    args.push("--setenv", k, v);
+  }
   for (const [k, v] of Object.entries(extra)) {
     if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) continue;
     args.push("--setenv", k, v);
