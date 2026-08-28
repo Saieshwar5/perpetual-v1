@@ -138,7 +138,7 @@ test("the built-in adapters are readable, and say what they are", async () => {
   const { adapters, problems } = await readAdapters();
   assert.deepEqual(problems, []);
   const names = adapters.map((a) => a.name);
-  assert.deepEqual(names, ["files", "git"]);
+  assert.deepEqual(names, ["files", "git", "mail"]);
 
   const files = adapters.find((a) => a.name === "files")!;
   assert.equal(files.surface, "workspace");
@@ -148,6 +148,13 @@ test("the built-in adapters are readable, and say what they are", async () => {
   assert.equal(git.surface, "page",
     "the standard has to be able to say `no workspace` as clearly as `workspace`");
   assert.equal(git.hasBin, false, "git is a real program; wrapping it would get in the way");
+
+  // Mail is the one that needs something the sandbox does not have, and it
+  // says so in the manifest rather than discovering it at the point of use.
+  const mail = adapters.find((a) => a.name === "mail")!;
+  assert.equal(mail.surface, "either",
+    "an inbox is a workspace; `how many unread` is a sentence — same tool");
+  assert.deepEqual(mail.needs, ["broker:mail"]);
   assert.ok(adaptersDir().endsWith("adapters"));
 });
 

@@ -26,6 +26,7 @@
 import { spawn } from "node:child_process";
 import { OutputAccumulator, formatResult, type Captured } from "./output.ts";
 import { wrapCommand, mountPath, toolsDir, ulimits, type SandboxConfig } from "./sandbox.ts";
+import type { Broker } from "../broker.ts";
 
 export const DEFAULT_TIMEOUT_SEC = 120;
 const MAX_TIMEOUT_SEC = 600;
@@ -84,12 +85,23 @@ export function script(
   ].join("\n");
 }
 
-export function createShell(cfg: SandboxConfig) {
+/**
+ * @param broker answers capability calls from inside, while a command runs.
+ *
+ * Listening only for the life of a command is not an optimisation — it is the
+ * honest lifetime. Nothing in the sandbox can call the broker when no command
+ * of the sandbox's is running, so a socket that outlived one would be reach
+ * granted for no reason.
+ */
+export function createShell(cfg: SandboxConfig, broker?: Broker) {
   const home = mountPath(cfg);
   let cwd = home;
 
   async function run(req: ShellRequest): Promise<ShellResult> {
     const started = Date.now();
+    // Before the spawn, so `mail list` as the very first thing a command does
+    // still finds someone listening.
+    const stopBroker = broker ? await broker.serve(cfg.root).catch(() => null) : null;
     const timeoutSec = Math.min(Math.max(1, req.timeoutSec ?? DEFAULT_TIMEOUT_SEC), MAX_TIMEOUT_SEC);
     const acc = new OutputAccumulator();
     const { file, args } = wrapCommand(
@@ -149,6 +161,7 @@ export function createShell(cfg: SandboxConfig) {
       child.on("close", (code, sig) => resolve(code ?? (sig ? 137 : 1)));
     });
     clearTimeout(timer);
+    stopBroker?.();
     req.signal?.removeEventListener("abort", onAbort);
 
     // The marker is the last thing on the pipe. If the command called `exit`
