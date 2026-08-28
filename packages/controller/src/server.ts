@@ -19,6 +19,7 @@ import { SessionStore } from "./sessions.ts";
 import { readSite } from "./site.ts";
 import { readApps, commandFor, fieldEnv, APPS_REL } from "./apps.ts";
 import { readAdapters, adaptersDir, type Adapter } from "./adapters.ts";
+import { Broker, credential, READ_PROFILE } from "./broker.ts";
 import { createShell } from "./shell/tool.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
@@ -116,6 +117,16 @@ try {
 const LOCAL_ADAPTERS = join(ROOT, "tools");
 let HAS_LOCAL_ADAPTERS = false;
 let ADAPTERS: Adapter[] = [];
+/** Which Google credential mail would run against, or null when there is none. */
+let MAIL_CREDENTIAL: string | null = null;
+
+/**
+ * One broker for the server, listening per session only while a command runs.
+ *
+ * It is what lets a sandbox with no network and no credential read a mailbox:
+ * the reach is out here, behind a fixed table of verbs. See broker.ts.
+ */
+const BROKER = new Broker();
 
 const sandboxFor = (id: string, sealed: string[] = []): SandboxConfig => ({
   root: store.siteDir(id), net: NET, unsafe: UNSAFE, sealed,
@@ -244,6 +255,7 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
     sandbox: sandboxFor(id, sealedFor(before, index)),
     pastAsks: index.asks,
     adapters: ADAPTERS,
+    broker: BROKER,
     ...(anchor?.page ? {
       anchor: {
         page: anchor.page,
@@ -381,7 +393,7 @@ async function act(req: IncomingMessage, res: ServerResponse, id: string) {
   if (!found) return json(res, 200, { ran: false, app: view });
 
   const shell = createShell(sandboxFor(id, sealedFor(await readSite(store.siteDir(id)),
-    await store.read(id))));
+    await store.read(id))), BROKER);
   const r = await shell.run({
     command: found.run,
     timeoutSec: ACT_TIMEOUT_SEC,
@@ -485,6 +497,21 @@ server.on("error", (e: NodeJS.ErrnoException) => {
     HAS_LOCAL_ADAPTERS ? LOCAL_ADAPTERS : undefined);
   ADAPTERS = adapters;
   for (const p of problems) console.error(`  tool ${p.name}: ${p.message}`);
+
+  // A tool that needs a credential we do not have is told about ANYWAY, with
+  // the reason attached. The agent then declines for the right cause instead of
+  // trying and reading a stack trace, and the reader learns there is something
+  // to configure rather than that mail was never built.
+  const cred = await credential();
+  MAIL_CREDENTIAL = "error" in cred ? null
+    : cred.readOnly ? "read-only profile" : "PERPETUAL_GWS_CONFIG_DIR override";
+  if ("error" in cred) {
+    for (const a of ADAPTERS) {
+      if (a.needs.includes("broker:mail")) {
+        a.unavailable = "no read-only Google credential is set up on this machine";
+      }
+    }
+  }
 }
 
 server.listen(PORT, "127.0.0.1", () => {
@@ -495,6 +522,7 @@ server.listen(PORT, "127.0.0.1", () => {
     : API_KEY ? `${KEY_ENV} set` : `${KEY_ENV} NOT SET — /turn will 503`}`);
   console.log(`  sandbox   ${describeSandbox({ root: "", net: NET, unsafe: UNSAFE })}`);
   console.log(`  sessions  ${ROOT}`);
+  console.log(`  mail      ${MAIL_CREDENTIAL ?? `unavailable — no credential at ${READ_PROFILE}`}`);
   console.log(`  tools     ${ADAPTERS.length
     ? ADAPTERS.map((a) => a.name + (a.local ? "*" : "")).join(", ")
     : "none"}\n`);

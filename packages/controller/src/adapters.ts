@@ -64,6 +64,16 @@ export interface Adapter {
   local: boolean;
   /** Does it ship scripts to put on the PATH? */
   hasBin: boolean;
+  /**
+   * Why this tool cannot work right now, if it cannot.
+   *
+   * Set by the server once it knows what is actually configured. A tool that
+   * needs something absent is still LISTED, carrying its reason: silently
+   * dropping it would make a misconfigured tool look exactly like one that was
+   * never installed, which is the failure this whole registry exists to make
+   * loud (plans/15 rule 2 — never a silent downgrade).
+   */
+  unavailable?: string;
 }
 
 export interface AdapterProblem { name: string; message: string }
@@ -206,7 +216,8 @@ export function describeAdapters(adapters: Adapter[]): string | null {
   if (!adapters.length) return null;
   const list = adapters
     .map((a) => `  ${a.name} (${a.surface}) — ${a.summary}${
-      a.needs.length ? `  [needs ${a.needs.join(", ")}]` : ""}`)
+      a.unavailable ? `  [UNAVAILABLE: ${a.unavailable}]`
+        : a.needs.length ? `  [needs ${a.needs.join(", ")}]` : ""}`)
     .join("\n");
   return `\nTools installed here:\n${list}\n` +
     "Before using one, read its recipe — `cat " +
