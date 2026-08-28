@@ -27,8 +27,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Where built-in adapters live, and where they appear inside the sandbox. */
-export const ADAPTERS_MOUNT = "/opt/perpetual/tools";
-export const LOCAL_MOUNT = "/opt/perpetual/tools.local";
+export const ADAPTERS_MOUNT = "/perpetual/tools";
+export const LOCAL_MOUNT = "/perpetual/tools.local";
 export const adaptersDir = () =>
   join(dirname(fileURLToPath(import.meta.url)), "..", "adapters");
 

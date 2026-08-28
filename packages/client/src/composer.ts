@@ -38,6 +38,8 @@ export class Composer {
 
   private aimEl: HTMLElement;
   private aimText: HTMLElement;
+  private ctxEl: HTMLElement;
+  private ctxText: HTMLElement;
   private verbEl: HTMLElement;
   private rawBtn: HTMLButtonElement;
   private rawEl: HTMLElement;
@@ -66,6 +68,8 @@ export class Composer {
   onClose: () => void = () => {};
   /** The reader stopped pointing at a block, without closing the composer. */
   onUnaim: () => void = () => {};
+  /** The reader dropped the workspace context — the next question is about the site. */
+  onUncontext: () => void = () => {};
 
   constructor(root: HTMLElement, floatHost: HTMLElement) {
     this.root = root;
@@ -75,6 +79,9 @@ export class Composer {
     this.input = root.querySelector("input")!;
     this.aimEl = root.querySelector(".aim")!;
     this.aimText = root.querySelector(".aimtext")!;
+    this.ctxEl = root.querySelector(".ctx")!;
+    this.ctxText = root.querySelector(".ctxtext")!;
+    root.querySelector(".ctxoff")!.addEventListener("click", () => this.onUncontext());
     this.verbEl = root.querySelector(".verb")!;
     this.rawBtn = root.querySelector(".rawbtn")!;
     this.rawEl = root.querySelector(".raw")!;
@@ -163,6 +170,20 @@ export class Composer {
     // Faded means the block is no longer on screen — still pointed at, but the
     // reader cannot see it, so it should not look as certain as one they can.
     this.aimEl.classList.toggle("faded", Boolean(opts.faded));
+  }
+
+  /**
+   * Which workspace the next question is about.
+   *
+   * There used to be a second composer, inside the panel. Two inputs is a mode
+   * error: the reader could not tell which one they were typing into, and the
+   * answer changed depending on where the cursor had last been. One input, and
+   * a chip saying what it is aimed at.
+   */
+  context(name: string | null) {
+    this.ctxText.textContent = name ? `in ${name}` : "";
+    this.ctxEl.hidden = !name;
+    this.input.placeholder = name ? `Ask about ${name.toLowerCase()}…` : "Ask anything…";
   }
 
   placeholder(text: string) { this.input.placeholder = text; }

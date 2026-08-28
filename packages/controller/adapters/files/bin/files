@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""files — search and read the session's workspace, and draw the result.
+"""files — search and read the reader's working directory, and draw the result.
 
 The recipe beside this (tool.md) says what the view should look like. This
 writes it, which is the difference between instructions and an adapter: the
@@ -8,6 +8,10 @@ what the reader sees cannot drift.
 
 Everything it writes goes to ui/apps/files/ — the workspace tree, outside the
 seal, where a view is meant to be replaced.
+
+The SEARCH is deliberately thin now: with the real filesystem visible, `rg` and
+`fd` are better at finding things than this is, and the agent already knows
+them. What survives is the drawing, which is the part they cannot do.
 """
 import json
 import os
@@ -21,7 +25,17 @@ SNIPPET = 90
 
 
 def site():
-    return os.environ.get("PERPETUAL_SITE") or os.environ.get("HOME") or os.getcwd()
+    return os.environ.get("PERPETUAL_SITE") or os.getcwd()
+
+
+def root():
+    """Where a search starts: the reader's working directory, else here.
+
+    It used to be a `workspace/` folder inside the session — scratch space that
+    existed because the sandbox could not see anything else. It can now, so a
+    search should happen where the reader actually keeps their files.
+    """
+    return os.environ.get("PERPETUAL_WORKDIR") or os.getcwd()
 
 
 def app_dir():
@@ -91,9 +105,8 @@ def first_match(path, pattern):
 
 
 def search(pattern):
-    root = os.path.join(site(), "workspace")
     hits = []
-    for base, dirs, names in os.walk(root):
+    for base, dirs, names in os.walk(root()):
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for n in sorted(names):
             if n.startswith("."):
@@ -109,7 +122,7 @@ def search(pattern):
 
 
 def rel(path):
-    return os.path.relpath(path, site())
+    return os.path.relpath(path, root())
 
 
 def cmd_find(pattern):
@@ -117,8 +130,8 @@ def cmd_find(pattern):
     if not hits:
         write_view(f"no matches for {pattern}", [
             {"kind": "heading", "text": f"Nothing matches “{pattern}”"},
-            {"kind": "prose", "text": "Nothing in `workspace/` has that in its name or "
-                                      "its text. Try a shorter word."},
+            {"kind": "prose", "text": f"Nothing under `{root()}` has that in its "
+                                      "name or its text. Try a shorter word."},
         ])
         print(f"files: no matches for {pattern}")
         return 0
@@ -144,9 +157,9 @@ def cmd_find(pattern):
 
 
 def cmd_show(path):
-    full = path if os.path.isabs(path) else os.path.join(site(), path)
+    full = path if os.path.isabs(path) else os.path.join(root(), path)
     if not os.path.isfile(full):
-        die(f"no file at `{path}`.", "Paths are relative to the session root.")
+        die(f"no file at `{path}`.", f"Relative paths are read from {root()}.")
     size, modified = facts(full)
     try:
         with open(full, "r", errors="replace") as f:

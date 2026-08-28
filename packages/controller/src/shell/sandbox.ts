@@ -1,26 +1,45 @@
 /**
- * The sandbox. plans/15 §5.
+ * The sandbox. plans/15 §5, reshaped by plans/37.
  *
  * The agent's only tool is a shell, so containment cannot be done by checking
  * paths in tool arguments — you cannot string-match your way to containing
- * bash. It has to be done by the kernel. bubblewrap gives unprivileged
- * namespaces with no daemon, no image, and about a millisecond of overhead.
+ * bash, and any list of "dangerous commands" is a list a model steps around
+ * without meaning to. It has to be done by the kernel. bubblewrap gives
+ * unprivileged namespaces with no daemon, no image, and about a millisecond of
+ * overhead.
  *
- * The shape of the answer: the session's `site/` directory is bind-mounted at
- * /session and is the ONLY writable path. Everything else is read-only or
- * simply absent from the namespace — `~/.ssh` is not protected, it does not
- * exist. Network is off unless the session was granted it.
+ * The whole posture, in one sentence:
  *
- * Two rules that are easy to get wrong and expensive to get wrong:
+ *   READ anything except secrets. WRITE only the session and one directory the
+ *   reader chose. RUN anything installed.
+ *
+ * That is a deliberate loosening. Before, the session directory was the only
+ * READABLE path as well as the only writable one, and it bought less than it
+ * cost: an agent that cannot see your project cannot help with it, and every
+ * real task began by copying files into a sandbox that was pretending the rest
+ * of the computer did not exist.
+ *
+ * What is given up is real and worth naming. With the disk readable and the
+ * network on, anything the agent can read it can also send somewhere. Two
+ * things still hold, and they are the ones doing the work now: what is worth
+ * stealing is NOT IN THE NAMESPACE — `~/.ssh` reads as empty rather than as
+ * forbidden — and writes cannot leave the two places the reader picked.
+ *
+ * Three rules that are easy to get wrong and expensive to get wrong:
  *
  *   1. The escape hatch lives in HARNESS CONFIG, never in the tool schema.
- *      The model must not be able to ask its way out of the sandbox.
+ *      The model must not be able to ask its way out — which is why the
+ *      working directory is chosen in chrome and arrives here as config,
+ *      rather than being something a turn can set for itself.
  *   2. A missing bwrap is a REFUSAL, not a silent downgrade. Otherwise
  *      "unsandboxed" quietly becomes the default on the first machine that
  *      lacks it, which is exactly the machine where it matters.
+ *   3. Everything read-only is read-only BY MOUNT. Nothing in this file looks
+ *      at a command and decides whether to permit it.
  */
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +58,7 @@ export const MOUNT = "/session";
  * Read-only, and outside the one writable path, so the agent cannot rewrite
  * the program that edits its pages.
  */
-export const TOOLS_MOUNT = "/opt/perpetual/bin";
+export const TOOLS_MOUNT = "/perpetual/bin";
 export const toolsDir = () =>
   join(dirname(fileURLToPath(import.meta.url)), "..", "..", "sandbox-bin");
 
@@ -51,52 +70,100 @@ export const toolsDir = () =>
  * UI should look; an adapter the agent could edit would be an instruction it
  * writes to itself.
  */
-export const ADAPTERS_MOUNT = "/opt/perpetual/tools";
-export const LOCAL_ADAPTERS_MOUNT = "/opt/perpetual/tools.local";
+export const ADAPTERS_MOUNT = "/perpetual/tools";
+export const LOCAL_ADAPTERS_MOUNT = "/perpetual/tools.local";
 
 /**
- * Where an UNLOCKED host program appears, and its credential beside it.
+ * Top-level directories that never come from the host.
  *
- * This is the escape hatch of plans/36, and it is the exception to everything
- * above: a real binary from the host, with a real Google credential, inside the
- * namespace. While it is on there is no enforcement left — the agent can send
- * and delete mail, and can do so because a message it read told it to.
- *
- * It exists because a verb table written from imagination is wrong, and the way
- * to write a right one is to watch the agent use the real CLI. Off by default,
- * refused unless asked for by name, and loud in the chrome whenever it is on.
- *
- * NOT on the PATH: the journaling wrapper that adapters/gws ships is what the
- * agent finds when it types `gws`. That wrapper is a record, not a gate — the
- * absolute path still works, and it is meant to.
+ * Everything else in `/` is bind-mounted read-only, which is what "read
+ * anything" means in practice. These four are replaced rather than copied:
+ * /proc and /dev get bwrap's own, /tmp gets a fresh tmpfs, and /perpetual is
+ * ours — the reason our mounts moved off /opt, where the host may have real
+ * software the reader wants to run.
  */
-export const HOST_MOUNT = "/opt/perpetual/host";
-export const GWS_CONFIG_MOUNT = "/opt/perpetual/gws-config";
+const OWN_TOP = new Set(["proc", "dev", "tmp", "perpetual", "session"]);
 
-export interface Unlocked {
-  /** What was unlocked. Named, so the next one cannot ride in on this one. */
-  what: "gws";
-  /** Host path to the real binary. */
-  bin: string;
-  /** Host path to its credential directory. Writable: gws caches tokens. */
-  configDir: string;
-}
+/**
+ * What stays hidden once everything else is visible.
+ *
+ * Each of these is covered with an empty tmpfs, so it reads as EMPTY rather
+ * than as forbidden — the same principle the old sandbox applied to the whole
+ * disk, kept for the short list that is actually worth stealing. A directory
+ * that is not in the namespace cannot be reached by a clever command, an
+ * unlucky glob, or an agent that was talked into it by something it read.
+ *
+ * Paths are relative to the reader's home directory. Only ones that exist are
+ * covered: a machine without a browser profile should not grow an empty one.
+ */
+export const SECRETS = [
+  ".ssh", ".gnupg", ".aws", ".kube", ".netrc", ".git-credentials",
+  ".password-store", ".local/share/keyrings", ".docker/config.json",
+  ".mozilla", ".config/google-chrome", ".config/chromium",
+  ".config/BraveSoftware", ".thunderbird",
+  ".config/gh", ".config/gcloud", ".config/gws",
+];
+
+/**
+ * Credential directories the reader can put back, by name.
+ *
+ * This is the tension the design runs into, and there is no clever way past
+ * it: the files that make a CLI useful are exactly the files worth stealing.
+ * `gws` works because ~/.config/gws holds a Google token — hide it and mail
+ * does not work; show it and the agent has whatever that token has.
+ *
+ * So the honest arrangement. Nothing is visible by default, and the reader
+ * names what to put back. Naming `gws` means "this session may act as me in
+ * Gmail", said once, in config, on purpose.
+ */
+export const CREDENTIALS: Record<string, string> = {
+  gws: ".config/gws",
+  gh: ".config/gh",
+  gcloud: ".config/gcloud",
+  aws: ".aws",
+  kube: ".kube",
+  docker: ".docker/config.json",
+  ssh: ".ssh",
+  gnupg: ".gnupg",
+};
 
 export interface SandboxConfig {
   /** Real path to the session's `site/` directory. */
   root: string;
-  /** Grant network access to this session. Off by default. */
+  /**
+   * Network access. ON by default now.
+   *
+   * The agent may run anything installed, and most of what is installed is
+   * useless offline. Leaving this off would have shipped a sandbox whose
+   * headline feature did not work until you found the flag.
+   */
   net: boolean;
   /**
-   * A host CLI mounted in with its credential, for testing. plans/36.
+   * The one directory outside the session this may WRITE to, chosen by the
+   * reader in chrome.
    *
-   * Never inferred: it takes its own switch, and it does not imply `net` even
-   * though it is useless without it. Two switches means neither is flipped by
-   * accident.
+   * Absent is the default and is not a lesser mode: a session that only writes
+   * its own record is exactly right for answering a question, and it is what
+   * you want before you have decided the agent should touch your files.
    */
-  unlocked?: Unlocked;
+  workdir?: string;
+  /**
+   * Credential directories to leave visible — names from CREDENTIALS, or
+   * absolute paths. Empty by default.
+   */
+  credentials?: string[];
   /** Set by PERPETUAL_UNSAFE=1. Development only; never a fallback. */
   unsafe: boolean;
+  /**
+   * Where ALL sessions live on disk — session.json, transcripts, other
+   * sessions' pages.
+   *
+   * Passed in so it can be nailed read-only even when it falls INSIDE the
+   * chosen working directory, which is exactly what happens when the reader
+   * points a session at the repo this runs from. `session.json` records which
+   * sections are sealed; a writable one would let a turn unseal itself.
+   */
+  sessionsRoot?: string;
   /** Real path to the built-in adapters, when there are any. */
   adapters?: string;
   /** Real path to the reader's own adapters, when they have some. */
@@ -142,26 +209,39 @@ export function bwrapAvailable(): boolean {
  * inside the sandbox even by `env`. Verified by a test, because the failure is
  * silent and total.
  */
-export function sandboxEnv(
-  mount: string, adapterBins: string[] = [], unlocked?: Unlocked,
-): Record<string, string> {
+export function sandboxEnv(cfg: SandboxConfig): Record<string, string> {
+  const cwd = cfg.workdir ?? MOUNT;
   return {
-    ...(unlocked ? {
-      GOOGLE_WORKSPACE_CLI_CONFIG_DIR: GWS_CONFIG_MOUNT,
-      // There is no session bus in here, and there should not be one. The file
-      // backend uses the key already beside the credentials.
-      GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file",
-      // Read by the journaling wrapper that adapters/gws puts on the PATH.
-      PERPETUAL_GWS_HOST: `${HOST_MOUNT}/gws`,
-    } : {}),
     // An adapter's `bin/` is on the PATH, so a recipe can say `mail list`
     // rather than a path — the scripts ARE the tool, as far as the agent is
-    // concerned.
-    PATH: [TOOLS_MOUNT, ...adapterBins, "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
-    HOME: mount,
+    // concerned. The host's own PATH follows, because "run anything installed"
+    // has to include things that are not in /usr/bin.
+    PATH: [
+      TOOLS_MOUNT, ...(cfg.binPaths ?? []),
+      ...(process.env.PATH ?? "").split(":").filter(Boolean),
+      "/usr/local/bin", "/usr/bin", "/bin",
+    ].join(":"),
+    // The reader's REAL home, read-only. `~` now means what they mean by it,
+    // and a tool looking for its own config in ~/.config finds it — which is
+    // the point of the whole change, and also why SECRETS exists.
+    HOME: homedir(),
+    // Where the record is written. Not HOME any more: the two were the same
+    // thing only because there was nothing else in the namespace.
+    PERPETUAL_SITE: MOUNT,
+    // The one place outside the record that can be written. Adapters read this
+    // rather than guessing, so `files find` searches where the reader is
+    // working instead of wherever the last `cd` happened to land.
+    ...(cfg.workdir ? { PERPETUAL_WORKDIR: cfg.workdir } : {}),
+    // Tool-specific, and it earns the exception: gws defaults to a keyring
+    // that talks to the session bus, and there is no session bus in here. A
+    // credential the reader deliberately made visible should WORK, rather than
+    // failing with "Failed to get token" and looking like a login problem. The
+    // file backend reads the key already sitting beside the credentials.
+    ...(visibleCredentials(cfg).has("gws")
+      ? { GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND: "file" } : {}),
     LANG: "C.UTF-8",
     TERM: "dumb",
-    PWD: mount,
+    PWD: cwd,
     // Keeps tools that shell out to a pager from hanging forever on a pipe.
     PAGER: "cat",
     GIT_PAGER: "cat",
@@ -238,6 +318,96 @@ function resolverBinds(): string[] {
 }
 
 /**
+ * Take the resolver away again when the network is off.
+ *
+ * `--unshare-net` removes the network, not the resolver: systemd-resolved is
+ * reached over a UNIX SOCKET, and unix sockets do not live in the network
+ * namespace. Now that /run comes from the host, a sandbox with no network
+ * could still resolve names — which fetches nothing, but can certainly SEND
+ * something, one lookup at a time.
+ *
+ * Caught by a test that had been passing for the old mount table and started
+ * failing the moment /run arrived. Exactly what those tests are for.
+ */
+function resolverBlinds(): string[] {
+  let real: string;
+  try { real = realpathSync("/etc/resolv.conf"); } catch { return []; }
+  if (real === "/etc/resolv.conf") return [];
+  return ["--tmpfs", dirname(real)];
+}
+
+/**
+ * The disk, read-only, one top-level directory at a time.
+ *
+ * Symlinks are recreated rather than followed: /bin, /lib and /sbin point into
+ * /usr on modern distros, and turning them into real directories would work
+ * right up until something compared paths and found /bin/sh was not /usr/bin/sh.
+ */
+function topBinds(): string[] {
+  const args: string[] = [];
+  let names: string[];
+  try { names = readdirSync("/"); } catch { return args; }
+
+  for (const name of names.sort()) {
+    if (OWN_TOP.has(name)) continue;
+    const path = `/${name}`;
+    let st;
+    try { st = lstatSync(path); } catch { continue; }
+    if (st.isSymbolicLink()) {
+      try { args.push("--symlink", readlinkSync(path), path); } catch { /* skip */ }
+    } else if (st.isDirectory()) {
+      args.push("--ro-bind-try", path, path);
+    }
+  }
+  return args;
+}
+
+/**
+ * Cover the secrets, and give the home directory somewhere to write a cache.
+ *
+ * The cache matters more than it looks: with HOME pointing at the reader's real
+ * home and that home read-only, a great many tools fail on their first run
+ * trying to create ~/.cache. An empty tmpfs there costs nothing, is thrown away
+ * with the sandbox, and keeps `pip`, `npm`, `go` and friends working.
+ */
+/** The credential NAMES this session has been given, ignoring bare paths. */
+function visibleCredentials(cfg: SandboxConfig): Set<string> {
+  return new Set((cfg.credentials ?? []).filter((n) => n in CREDENTIALS));
+}
+
+function homeBinds(cfg: SandboxConfig): string[] {
+  const home = homedir();
+  const allowed = new Set<string>();
+  for (const name of cfg.credentials ?? []) {
+    if (name.startsWith("/")) { allowed.add(name); continue; }
+    const rel = CREDENTIALS[name];
+    if (rel) allowed.add(join(home, rel));
+  }
+
+  const args: string[] = [];
+  for (const rel of SECRETS) {
+    const path = join(home, rel);
+    if (allowed.has(path)) continue;
+    // Only what exists: a machine with no browser profile should not grow an
+    // empty one, and an absent path is already the outcome we want.
+    if (!existsSync(path)) continue;
+    args.push("--tmpfs", path);
+  }
+  // An allowed credential is bound WRITABLE, over the read-only home.
+  //
+  // Not a generosity — a requirement. These CLIs cache refreshed access tokens
+  // beside their credentials, and a read-only config directory fails as "Failed
+  // to get token", which reads like a broken login rather than a broken mount.
+  // The extra exposure over read-only is small: a token you can read is already
+  // a token you can use.
+  for (const path of allowed) {
+    if (existsSync(path)) args.push("--bind", path, path);
+  }
+  args.push("--tmpfs", join(home, ".cache"));
+  return args;
+}
+
+/**
  * Build the argv that runs `script` under containment.
  *
  * `extra` is per-run environment — a workspace form's values, which reach the
@@ -255,45 +425,56 @@ export function wrapCommand(
     "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",
     ...(cfg.net ? resolverBinds() : ["--unshare-net"]),
     "--clearenv",
-    // Read-only system. /bin, /lib, /sbin are symlinks into /usr on modern
-    // distros; recreating them keeps shebangs like #!/bin/sh working.
-    "--ro-bind", "/usr", "/usr",
-    "--ro-bind", "/etc", "/etc",
-    "--symlink", "usr/bin", "/bin",
-    "--symlink", "usr/lib", "/lib",
-    "--symlink", "usr/lib64", "/lib64",
-    "--symlink", "usr/sbin", "/sbin",
+    // THE DISK, READ-ONLY. Every top-level directory except the four we
+    // provide ourselves.
+    //
+    // Enumerated rather than `--ro-bind / /`, and the reason is load-bearing:
+    // with the root itself read-only, bwrap cannot create the mount points for
+    // anything that follows — it fails with "Can't mkdir parents for
+    // /perpetual/tools: Read-only file system". Leaving the root as bwrap's own
+    // tmpfs keeps /perpetual and /session creatable.
+    ...topBinds(),
     "--proc", "/proc",
     "--dev", "/dev",
     "--tmpfs", "/tmp",
-    // The agent's own programs: read-only, and outside the writable path.
-    "--ro-bind", toolsDir(), TOOLS_MOUNT,
-    // The adapters, likewise. Recipes and their scripts are configuration.
+    // The agent's own programs, and the adapters: read-only, and outside every
+    // writable path, because configuration the agent can edit is not
+    // configuration.
     //
     // `--ro-bind-try`, not `--ro-bind`: the reader's own adapter directory
     // usually does not exist, and bwrap refuses to start at all when a bind
     // source is missing. That turned every command in a session without a
     // local tools directory into "Can't find source path".
+    "--ro-bind", toolsDir(), TOOLS_MOUNT,
     ...(cfg.adapters ? ["--ro-bind-try", cfg.adapters, ADAPTERS_MOUNT] : []),
     ...(cfg.localAdapters ? ["--ro-bind-try", cfg.localAdapters, LOCAL_ADAPTERS_MOUNT] : []),
-    // The escape hatch. The BINARY, not the directory it sits in: a directory
-    // bind would put an installer script and a package manifest in reach for
-    // no reason. Its credential directory is writable because gws caches
-    // refreshed tokens — which is also why a credential exposed this way
-    // should be treated as spent.
-    ...(cfg.unlocked
-      ? ["--ro-bind", cfg.unlocked.bin, `${HOST_MOUNT}/gws`,
-         "--bind", cfg.unlocked.configDir, GWS_CONFIG_MOUNT]
-      : []),
-    // The one writable path.
+    // …then the secrets are covered over, AFTER the home directory they live
+    // in has been bound. Order is the whole trick: a tmpfs placed before its
+    // parent bind would simply be replaced by it.
+    ...homeBinds(cfg),
+    // The resolver goes AFTER the disk, or the bind of /run puts it straight
+    // back. Ordering is the whole of bwrap's semantics and the easiest thing
+    // here to get quietly wrong — this exact mistake made a network-off
+    // sandbox resolve names for one commit.
+    ...(cfg.net ? [] : resolverBlinds()),
+    // WRITABLE, and this is the entire list. The session's own record…
     "--bind", cfg.root, MOUNT,
     // …with the published sections mounted read-only over themselves. Order
-    // matters: bwrap applies these in sequence, so a ro-bind onto a subpath of
-    // an already-bound tree makes exactly that subtree read-only.
+    // matters here too: a ro-bind onto a subpath of an already-bound tree
+    // makes exactly that subtree read-only.
     ...sealedBinds(cfg),
-    "--chdir", MOUNT,
+    // …and the one directory the reader chose, at its real path, so that
+    // absolute paths in the agent's output mean something outside the sandbox.
+    ...(cfg.workdir ? ["--bind", cfg.workdir, cfg.workdir] : []),
+    // …and the controller's own state pinned read-only ON TOP of it. The
+    // sessions root sits inside the repo by default, so a reader who chooses
+    // that repo as their working directory would otherwise be handing the
+    // agent write access to session.json — the file that records what is
+    // sealed. Last, because the last mount over a path is the one that wins.
+    ...(cfg.sessionsRoot ? ["--ro-bind-try", cfg.sessionsRoot, cfg.sessionsRoot] : []),
+    "--chdir", cfg.workdir ?? MOUNT,
   ];
-  for (const [k, v] of Object.entries(sandboxEnv(MOUNT, cfg.binPaths ?? [], cfg.unlocked))) {
+  for (const [k, v] of Object.entries(sandboxEnv(cfg))) {
     args.push("--setenv", k, v);
   }
   for (const [k, v] of Object.entries(extra)) {
@@ -317,20 +498,35 @@ export function sealedBinds(cfg: SandboxConfig): string[] {
   return args;
 }
 
-/** The path the agent is told about, which differs only in unsafe mode. */
+/** Where the record lives, in the agent's coordinates. */
 export function mountPath(cfg: SandboxConfig): string {
   return cfg.unsafe ? cfg.root : MOUNT;
+}
+
+/**
+ * Where a command starts.
+ *
+ * The reader's working directory when there is one, because that is what they
+ * meant by choosing it — a session pointed at a project should answer `ls`
+ * with that project, not with the machinery of its own record.
+ *
+ * bwrap's `--chdir` is not enough on its own: the shell wrapper cds explicitly
+ * so that `cd` can persist between commands, and that cd wins.
+ */
+export function startDir(cfg: SandboxConfig): string {
+  return cfg.workdir ?? mountPath(cfg);
 }
 
 export function describeSandbox(cfg: SandboxConfig): string {
   const sealed = cfg.sealed?.length
     ? ` · ${cfg.sealed.length} published section${cfg.sealed.length === 1 ? "" : "s"} read-only`
     : "";
-  // Loud, and first: an unlocked session that reads like a locked one is the
-  // actual danger. The mistake is never "the agent sent mail", it is "nobody
-  // knew it could".
-  const open = cfg.unlocked ? `${cfg.unlocked.what.toUpperCase()} UNLOCKED · ` : "";
-  if (cfg.unsafe) return `${open}UNSANDBOXED (PERPETUAL_UNSAFE=1)${sealed}`;
-  return `${open}bubblewrap · ${cfg.net ? "network ON" : "no network"} · ` +
-    `writable: ${MOUNT}${sealed}`;
+  // What the reader needs from this string is one thing: where can it write.
+  // Reading is broad and uninteresting; writing is the part with consequences,
+  // so it is the part that gets named.
+  const writable = cfg.workdir ? `${MOUNT} + ${cfg.workdir}` : MOUNT;
+  const creds = cfg.credentials?.length ? ` · credentials: ${cfg.credentials.join(", ")}` : "";
+  if (cfg.unsafe) return `UNSANDBOXED (PERPETUAL_UNSAFE=1)${sealed}`;
+  return `bubblewrap · ${cfg.net ? "network ON" : "no network"} · ` +
+    `writable: ${writable}${creds}${sealed}`;
 }

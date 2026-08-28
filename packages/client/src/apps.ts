@@ -34,7 +34,6 @@ export class AppPanel {
   private viewEl: HTMLElement;
   private bodyEl: HTMLElement;
   private noteEl: HTMLElement;
-  private input: HTMLInputElement;
   private apps = new Map<string, AppView>();
   private current: string | null = null;
   private tabs: HTMLElement;
@@ -44,8 +43,6 @@ export class AppPanel {
     values?: Record<string, string | boolean>) => void = () => {};
   /** A row that does not: ask the agent, carrying what was picked. */
   onAsk: (selection: Selection) => void = () => {};
-  /** Typed into the panel's own composer, which is scoped to this workspace. */
-  onSubmit: (app: string, text: string) => void = () => {};
   onClose: (app: string) => void = () => {};
   /** The panel opened or closed, so the layout can make room for it. */
   onLayout: (open: boolean) => void = () => {};
@@ -57,7 +54,6 @@ export class AppPanel {
     this.viewEl = root.querySelector(".pview")!;
     this.bodyEl = root.querySelector(".pbody")!;
     this.noteEl = root.querySelector(".pnote")!;
-    this.input = root.querySelector(".pask input")!;
 
     root.querySelector(".pclose")!.addEventListener("click", () => {
       if (this.current) this.onClose(this.current);
@@ -65,17 +61,13 @@ export class AppPanel {
     root.querySelector(".pwide")!.addEventListener("click", () => {
       root.classList.toggle("wide");
     });
-    root.querySelector(".pask form")!.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const text = this.input.value.trim();
-      if (!text || !this.current) return;
-      this.input.value = "";
-      this.onSubmit(this.current, text);
-    });
   }
 
   get open() { return this.apps.size > 0; }
   get activeId() { return this.current; }
+
+  /** One workspace by id, for chrome that needs to name it. */
+  get(id: string): AppView | undefined { return this.apps.get(id); }
 
   /** Everything the session has open. Used on load and after a turn. */
   setAll(apps: AppView[]) {
@@ -123,7 +115,6 @@ export class AppPanel {
   /** A command is running, or a turn is: the panel says so rather than freezing. */
   working(on: boolean) {
     this.root.classList.toggle("busy", on);
-    this.input.disabled = on;
   }
 
   private actionsFor(app: AppView): BlockActions {
@@ -222,7 +213,6 @@ export class AppPanel {
     this.titleEl.textContent = app.title;
     this.viewEl.textContent = app.view ?? "";
     this.viewEl.hidden = !app.view;
-    this.input.placeholder = `Ask about ${app.title.toLowerCase()}…`;
 
     const acts = this.actionsFor(app);
     const doc = document.createElement("div");

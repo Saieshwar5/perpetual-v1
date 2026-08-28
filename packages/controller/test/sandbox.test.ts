@@ -1,8 +1,15 @@
 /**
  * These are the tests that decide whether the harness is safe to point at a
- * model. Every one checks a containment claim made in plans/15 §5, and every
- * failure here is silent in production — the agent would simply have more
- * reach than intended and nothing would look wrong.
+ * model. Every one checks a containment claim, and every failure here is
+ * silent in production — the agent would simply have more reach than intended
+ * and nothing would look wrong.
+ *
+ * The claims changed with plans/37. The sandbox now READS the whole disk on
+ * purpose, so the tests that mattered under the old posture ("no home
+ * directory", "nothing outside the session exists") no longer describe
+ * anything true. What replaced them is narrower and, being narrower, worth
+ * more: secrets are absent, writes are confined to two named places, and the
+ * controller's own record cannot be edited by the thing it is a record of.
  */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -20,7 +27,7 @@ let sh: ReturnType<typeof createShell>;
 
 before(async () => {
   root = await mkdtemp(join(tmpdir(), "perp-test-"));
-  await mkdir(join(root, "workspace"), { recursive: true });
+  await mkdir(join(root, "ui", "pages"), { recursive: true });
   sh = createShell({ root, net: false, unsafe: false });
 });
 after(async () => { await rm(root, { recursive: true, force: true }); });
@@ -33,27 +40,94 @@ test("the API key is invisible from inside", { skip }, async () => {
   delete process.env.PERP_FAKE_KEY;
 });
 
-test("the home directory does not exist in the namespace", { skip }, async () => {
-  const r = await sh.run({ command: "ls /home; ls ~/.ssh" });
-  assert.match(r.text, /No such file or directory/);
+test("the home directory is readable — that is the point of plans/37", { skip }, async () => {
+  const r = await sh.run({ command: "ls ~ >/dev/null && echo READABLE" });
+  assert.match(r.text, /READABLE/);
 });
 
-test("only the session directory is writable", { skip }, async () => {
+test("…and secrets in it are EMPTY, not forbidden", { skip }, async () => {
+  // Absent rather than protected: a directory that is not in the namespace
+  // cannot be reached by a clever command, an unlucky glob, or an agent that
+  // was talked into it by something it read. Only paths that exist on this
+  // machine are checked — an absent one is already the outcome we want.
+  const r = await sh.run({
+    command: 'for d in ~/.ssh ~/.gnupg ~/.aws ~/.config/gh; do ' +
+      '[ -d "$d" ] && echo "$d:$(ls -A "$d" | wc -l)"; done; echo END',
+  });
+  for (const line of r.text.split("\n")) {
+    const m = /^(\S+):(\d+)$/.exec(line.trim());
+    if (m) assert.equal(m[2], "0", `${m[1]} is not empty inside the sandbox`);
+  }
+});
+
+test("the home directory is NOT writable", { skip }, async () => {
+  const r = await sh.run({ command: "touch ~/perp-should-fail 2>&1; echo -n" });
+  assert.match(r.text, /Read-only file system/);
+});
+
+test("with no working directory, only the session is writable", { skip }, async () => {
   const r = await sh.run({ command: "touch /usr/x; touch /etc/x; echo -n" });
   assert.equal((r.text.match(/Read-only file system/g) ?? []).length, 2);
 
-  const w = await sh.run({ command: "echo inside > proof.txt && cat proof.txt" });
+  const w = await sh.run({ command: "echo inside > /session/proof.txt && cat /session/proof.txt" });
   assert.match(w.text, /inside/);
   assert.equal(await readFile(join(root, "proof.txt"), "utf8"), "inside\n");
 });
 
-test("there is no network", { skip }, async () => {
-  const r = await sh.run({ command: "getent hosts example.com || echo NO-DNS", timeoutSec: 8 });
+test("a chosen working directory is writable, and it is the only addition", { skip }, async () => {
+  const work = await mkdtemp(join(tmpdir(), "perp-work-"));
+  const outside = await mkdtemp(join(tmpdir(), "perp-outside-"));
+  const w = createShell({ root, net: false, unsafe: false, workdir: work });
+
+  const there = await w.run({ command: "pwd; echo yes > made.txt && cat made.txt" });
+  assert.match(there.text, new RegExp(work), "a command starts where the reader is working");
+  assert.equal(await readFile(join(work, "made.txt"), "utf8"), "yes\n");
+
+  // Choosing one directory does not quietly open anywhere else. A neighbour in
+  // /tmp does not even exist inside — /tmp is a fresh tmpfs — and a real path
+  // that does exist is read-only. Both are refusals; only the wording differs.
+  const no = await w.run({ command: `touch ${outside}/x 2>&1; touch ~/x 2>&1; echo -n` });
+  assert.match(no.text, /No such file or directory/);
+  assert.match(no.text, /Read-only file system/);
+  assert.doesNotMatch(no.text, /^touch: cannot touch.*\n?$/,
+    "neither write may quietly succeed");
+
+  await rm(work, { recursive: true, force: true });
+  await rm(outside, { recursive: true, force: true });
+});
+
+test("the controller's own record cannot be written, even from inside a workdir", { skip }, async () => {
+  // The sessions root lives inside the repo by default. A reader who picks
+  // that repo to work in would otherwise be handing the agent session.json —
+  // the file that records which sections are sealed.
+  const work = await mkdtemp(join(tmpdir(), "perp-repo-"));
+  const sessions = join(work, ".perpetual");
+  await mkdir(sessions, { recursive: true });
+  await writeFile(join(sessions, "session.json"), '{"open":[]}');
+
+  const w = createShell({
+    root, net: false, unsafe: false, workdir: work, sessionsRoot: sessions,
+  });
+  const r = await w.run({
+    command: `echo hacked > ${sessions}/session.json 2>&1; ` +
+             `rm -rf ${sessions} 2>&1; echo -n`,
+  });
+  assert.match(r.text, /Read-only file system/);
+  assert.equal(await readFile(join(sessions, "session.json"), "utf8"), '{"open":[]}');
+  await rm(work, { recursive: true, force: true });
+});
+
+test("network off means no network AND no resolver", { skip }, async () => {
+  // --unshare-net removes the network, not the resolver: systemd-resolved is
+  // reached over a unix socket, and unix sockets are not network-namespaced.
+  // A sandbox that can still look names up can still SEND, one lookup at a
+  // time. This test caught exactly that when /run started coming from the host.
+  const r = await sh.run({ command: "getent hosts example.com || echo NO-DNS", timeoutSec: 10 });
   assert.match(r.text, /NO-DNS/);
 });
 
 test("cd persists between commands, exports do not", { skip }, async () => {
-  await sh.run({ command: "mkdir -p ui/pages && cd ui/pages" });
+  await sh.run({ command: "cd /session/ui/pages" });
   const r = await sh.run({ command: "pwd" });
   assert.match(r.text, /\/session\/ui\/pages/);
 

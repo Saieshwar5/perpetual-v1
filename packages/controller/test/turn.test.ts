@@ -9,7 +9,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "../src/sessions.ts";
@@ -76,9 +76,12 @@ test("a second turn takes the next number without being told", { skip }, async (
   await rm(home, { recursive: true, force: true });
 });
 
-test("the agent's own record is not inside its sandbox", { skip }, async () => {
-  // session.json and transcript.jsonl sit beside `site/`, not in it. The agent
-  // has full authority over its world and none over the record of what it did.
+test("the agent's own record is not WRITABLE from inside", { skip }, async () => {
+  // It used to be unreachable, because nothing outside the session existed.
+  // Since plans/37 the disk is readable, so the claim is narrower and is the
+  // one that actually mattered: the agent has full authority over its world
+  // and none over the record of what it did. Reading it is harmless; editing
+  // session.json would let a turn decide what counts as published.
   const home = await mkdtemp(join(tmpdir(), "perp-reach-"));
   const store = new SessionStore(home);
   const s = await store.create();
@@ -87,9 +90,16 @@ test("the agent's own record is not inside its sandbox", { skip }, async () => {
   });
 
   const { createShell } = await import("../src/shell/tool.ts");
-  const sh = createShell({ root: store.siteDir(s.id), net: false, unsafe: false });
-  const r = await sh.run({ command: "ls -R / 2>/dev/null | grep -c transcript.jsonl || echo 0" });
-  assert.match(r.text, /^0/m, "the transcript is not reachable from inside");
+  const sh = createShell({
+    root: store.siteDir(s.id), net: false, unsafe: false, sessionsRoot: home,
+  });
+  const r = await sh.run({
+    command: `echo tampered > ${join(home, "sessions", s.id, "session.json")} 2>&1; ` +
+             `rm -f ${join(home, "sessions", s.id, "transcript.jsonl")} 2>&1; echo -n`,
+  });
+  assert.match(r.text, /Read-only file system/);
+  const after = JSON.parse(await readFile(join(home, "sessions", s.id, "session.json"), "utf8"));
+  assert.equal(after.id, s.id, "the record survived the attempt");
 
   await rm(home, { recursive: true, force: true });
 });

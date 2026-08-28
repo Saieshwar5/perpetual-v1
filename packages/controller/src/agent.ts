@@ -87,8 +87,6 @@ export interface TurnOptions {
   notes?: { drain(): string | null };
   /** The tool adapters installed, for the one-line index in the turn message. */
   adapters?: import("./adapters.ts").Adapter[];
-  /** Answers capability calls from inside the sandbox, for the life of a command. */
-  broker?: import("./broker.ts").Broker;
   /** What the reader has already taken and answered on this site. */
   answered?: Record<string, string>;
   chosen?: Record<string, string>;
@@ -169,7 +167,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
   // this is the backstop for the unsandboxed path, and the thing that decides
   // what the reader keeps seeing when a write gets through anyway.
   watcher.seal(o.sandbox.sealed ?? []);
-  const shell = createShell(o.sandbox, o.broker);
+  const shell = createShell(o.sandbox);
   const commands: string[] = [];
   const touched = new Set<string>();
   let steps = 0;

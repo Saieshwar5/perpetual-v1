@@ -403,6 +403,10 @@ flow.onScroll = () => placeComposer();
  * spared is the one holding a list you are not currently reading.
  */
 panel.onLayout = (open) => {
+  // A context pointing at a workspace that is no longer on screen is worse
+  // than none: the reader would be typing into something they cannot see.
+  if (!open) setContext(null);
+  else if (!context && panel.activeId) setContext(panel.activeId);
   appEl.dataset.panel = open ? "1" : "";
   if (open && document.documentElement.dataset.side !== "min") {
     document.documentElement.dataset.side = "min";
@@ -465,15 +469,160 @@ panel.onAsk = (selection) => {
   void composer.send(`${selection.prompt ? `${selection.prompt} — ` : ""}${selection.label}`);
 };
 
-/**
- * The panel's own composer. One turn engine, two places to start one: what you
- * type in the middle is about the site, what you type here is about the work,
- * and the turn message is told which.
+
+/* ------------------------------------------------------- what this session can do
+ *
+ * Two chips on the composer: where the agent may write, and which model is
+ * answering. Both are CHROME — the agent renders none of it and cannot reach
+ * the endpoints behind it. That is the point rather than an implementation
+ * detail: a working directory the agent could set would be a suggestion, and
+ * an agent that can widen its own write access has not been contained.
  */
-panel.onSubmit = (app, text) => {
-  pendingSelection = { app, page: app, control: "typed", option: "typed", label: text };
-  void composer.send(text);
-};
+const workdirBtn = $<HTMLButtonElement>("workdirbtn");
+const modelBtn = $<HTMLButtonElement>("modelbtn");
+const picker = $("picker");
+const modelMenu = $("modelmenu");
+
+let workdir: string | null = null;
+let model: string | null = null;
+let models: string[] = [];
+/** What the server answers with when a session has not picked. */
+let defaultModel: string | null = null;
+/** Where the picker is browsing, which is not yet where the session writes. */
+let browsing: string | null = null;
+
+const short = (p: string) => p.replace(/^\/home\/[^/]+/, "~");
+
+function paintBar() {
+  workdirBtn.querySelector(".barlabel")!.textContent =
+    workdir ? short(workdir).split("/").pop() || short(workdir) : "No working directory";
+  workdirBtn.title = workdir
+    ? `Writing in ${workdir} — click to change`
+    : "The agent can read your files but write nowhere outside this session";
+  workdirBtn.classList.toggle("on", Boolean(workdir));
+  modelBtn.querySelector(".barlabel")!.textContent =
+    (model ?? "").split("/").pop()?.replace(/^claude-/, "") || "model";
+  modelBtn.title = model ? `Answering with ${model}` : "Choose a model";
+}
+
+/** Both popovers are mutually exclusive; opening one closes the other. */
+function closeMenus() {
+  picker.hidden = true;
+  modelMenu.hidden = true;
+  workdirBtn.setAttribute("aria-expanded", "false");
+  modelBtn.setAttribute("aria-expanded", "false");
+}
+
+async function saveSettings(patch: { workdir?: string | null; model?: string | null }) {
+  if (!sessionId) return;
+  const r = await fetch(`/sessions/${sessionId}/settings`, {
+    method: "POST", body: JSON.stringify(patch),
+  });
+  const out = await r.json() as SessionIndex & { error?: string };
+  if (out.error) { status(out.error, "bad"); return; }
+  workdir = out.workdir ?? null;
+  model = out.model ?? defaultModel;
+  paintBar();
+}
+
+async function browse(path?: string) {
+  const r = await fetch(`/dirs${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+  const out = await r.json() as
+    { path: string; parent: string | null; dirs: string[]; error?: string };
+  if (out.error) { status(out.error, "bad"); return; }
+  browsing = out.path;
+  picker.querySelector(".pickpath")!.textContent = short(out.path);
+  (picker.querySelector(".pickup") as HTMLButtonElement).disabled = !out.parent;
+
+  const list = picker.querySelector(".picklist")!;
+  list.replaceChildren();
+  if (!out.dirs.length) {
+    const empty = document.createElement("div");
+    empty.className = "pickempty";
+    empty.textContent = "No folders in here.";
+    list.append(empty);
+  }
+  for (const name of out.dirs) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "pickrow";
+    row.textContent = name;
+    row.addEventListener("click", () => void browse(`${out.path}/${name}`));
+    list.append(row);
+  }
+}
+
+workdirBtn.addEventListener("click", () => {
+  const wasOpen = !picker.hidden;
+  closeMenus();
+  if (wasOpen) return;
+  if (!sessionId) { status("Ask something first — a folder belongs to a session", "bad"); return; }
+  picker.hidden = false;
+  workdirBtn.setAttribute("aria-expanded", "true");
+  void browse(workdir ?? undefined);
+});
+
+picker.querySelector(".pickup")!.addEventListener("click", () => {
+  if (browsing) void browse(browsing.split("/").slice(0, -1).join("/") || "/");
+});
+picker.querySelector(".pickuse")!.addEventListener("click", () => {
+  if (browsing) void saveSettings({ workdir: browsing });
+  closeMenus();
+});
+picker.querySelector(".pickclear")!.addEventListener("click", () => {
+  void saveSettings({ workdir: null });
+  closeMenus();
+});
+
+modelBtn.addEventListener("click", () => {
+  const wasOpen = !modelMenu.hidden;
+  closeMenus();
+  if (wasOpen) return;
+  modelMenu.replaceChildren();
+  for (const id of models) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "pickrow";
+    row.textContent = id.replace(/^claude-/, "");
+    if (id === model) row.classList.add("on");
+    row.addEventListener("click", () => {
+      // No session yet: remember it, and the next one starts with it.
+      if (!sessionId) { model = id; paintBar(); closeMenus(); return; }
+      void saveSettings({ model: id });
+      closeMenus();
+    });
+    modelMenu.append(row);
+  }
+  modelMenu.hidden = false;
+  modelBtn.setAttribute("aria-expanded", "true");
+});
+
+document.addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  if (picker.contains(t) || modelMenu.contains(t)) return;
+  if (workdirBtn.contains(t) || modelBtn.contains(t)) return;
+  closeMenus();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMenus();
+});
+
+/**
+ * Which workspace the one composer is aimed at.
+ *
+ * Null means the site. The reader can drop it with the chip's ×, and closing
+ * the workspace drops it too — a context pointing at something that is no
+ * longer on screen is worse than none.
+ */
+let context: string | null = null;
+
+function setContext(app: string | null) {
+  context = app;
+  const view = app ? panel.get(app) : undefined;
+  composer.context(view ? view.title : null);
+}
+
+composer.onUncontext = () => setContext(null);
 
 /**
  * Closing is the reader's, and closing means GONE: the directory goes with it.
@@ -831,6 +980,11 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   ]);
   side.setActive(id);
   side.rename(id, index.title);
+  // Both are properties of the conversation, not of the process: a session
+  // resumed tomorrow writes where it wrote today and answers with the same model.
+  workdir = index.workdir ?? null;
+  model = index.model ?? defaultModel;
+  paintBar();
   // A workspace belongs to its session, so it comes back with it — and never
   // travels to another one.
   panel.setAll(apps.apps ?? []);
@@ -1247,8 +1401,13 @@ composer.onSubmit = async (q) => {
   const fresh = !sessionId;
   // Consumed here and nowhere else: a click sets it immediately before
   // sending, so anything typed arrives with it already empty.
-  const selection = pendingSelection;
+  let selection = pendingSelection;
   pendingSelection = undefined;
+  // Typed while a workspace is in context: the turn is told which, exactly as
+  // a click on one of its rows would have.
+  if (!selection && context && panel.get(context)) {
+    selection = { app: context, page: context, control: "typed", option: "typed", label: q };
+  }
   // A click already says where it came from; an implicit anchor on top of it
   // would be a second, weaker answer to the same question.
   const anchor = fresh || selection ? undefined : (aim ?? currentAnchor());
@@ -1359,18 +1518,19 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !keys.hidden) showKeys(false);
 });
 
-const health = await (await fetch("/health")).json() as
-  { hasKey: boolean; model: string; provider: string; sandbox: string; replay: boolean };
+const health = await (await fetch("/health")).json() as {
+  hasKey: boolean; model: string; provider: string; sandbox: string;
+  replay: boolean; models?: string[];
+};
 $("badge").textContent = health.replay ? "replay" : health.provider ?? "model";
-// The model is a fact about the session and it changes often while building,
-// so it is shown rather than hidden in .env. Switching it still needs a
-// restart — the runtime is built once per process — which is the server-side
-// half of this and a separate piece of work.
-// The last segment only: `accounts/fireworks/models/deepseek-v4-flash-0731`
-// is a path, and the chip is a chip. The full id is in the tooltip.
-$("model").textContent = health.replay ? "scripted" : health.model.split("/").pop() ?? health.model;
-$("model").title = `${health.model} — set by PERPETUAL_MODEL; changing it needs a restart`;
+// The sandbox is a fact about the machine and belongs in the sidebar's foot.
+// The MODEL moved to the composer, where it is a choice rather than a fact —
+// so this chip is gone and the one on the composer is the only one.
 $("sandbox").textContent = health.sandbox;
+models = health.models ?? [];
+defaultModel = health.model;
+model = defaultModel;
+paintBar();
 // Chrome is the zone the agent cannot render or fake, which is exactly why an
 // unlocked session has to be visible HERE and not in anything it writes.
 $("sandbox").classList.toggle("unlocked", health.sandbox.includes("UNLOCKED"));

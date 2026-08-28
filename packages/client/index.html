@@ -66,7 +66,6 @@
            and the turn. -->
       <div class="env wide">
         <span class="chip" id="badge"></span>
-        <span class="chip" id="model"></span>
         <span class="chip" id="sandbox"></span>
         <span class="chip spent" id="spent" hidden></span>
       </div>
@@ -92,14 +91,6 @@
     <div class="ptabs" hidden></div>
     <div class="pbody"></div>
     <div class="pnote" hidden></div>
-    <!-- Its own input, scoped to what is on screen here. What you type in the
-         middle is about the site; what you type here is about the work. -->
-    <div class="pask">
-      <form>
-        <input type="text" autocomplete="off" placeholder="Ask about this…" aria-label="Ask about this workspace">
-        <span class="enter">↵</span>
-      </form>
-    </div>
   </section>
 
   <!-- Reader settings. Chrome, never the canvas: the agent cannot see or
@@ -145,6 +136,15 @@
         <button class="aimoff" type="button" aria-label="Ask about the page instead">×</button>
       </div>
 
+      <!-- Which workspace the question is about. There used to be a second
+           composer inside the panel; a reader could not tell which of the two
+           they were typing into, and the answer changed depending on where the
+           cursor had last been. One input, and it says what it is aimed at. -->
+      <div class="ctx" hidden>
+        <span class="ctxtext"></span>
+        <button class="ctxoff" type="button" aria-label="Ask about the site instead">×</button>
+      </div>
+
       <!-- Always a field, never a button that hides one. It is SHORT when
            there is nothing to say to it and grows when there is — but a reader
            must always be able to see the place where they type. -->
@@ -169,7 +169,38 @@
       </div>
 
       <div class="pstatus"></div>
+
+      <!-- What this session can do, where the reader can see and change it.
+           Chrome: the agent renders none of this and cannot widen its own
+           reach by drawing a convincing directory. -->
+      <div class="pbar">
+        <button class="barbtn" id="workdirbtn" type="button" aria-haspopup="true"
+                aria-expanded="false" aria-label="Choose a working directory">
+          <span class="baricon">🗀</span><span class="barlabel">No working directory</span>
+        </button>
+        <button class="barbtn" id="modelbtn" type="button" aria-haspopup="true"
+                aria-expanded="false" aria-label="Choose a model">
+          <span class="barlabel">…</span>
+        </button>
+      </div>
+
+      <!-- The directory picker. A server-backed browser: the browser's own
+           picker hands back a handle, and what the sandbox needs is a path. -->
+      <div class="picker" id="picker" hidden>
+        <div class="pickhead">
+          <button class="pickup" type="button" aria-label="Up one level">↑</button>
+          <span class="pickpath"></span>
+        </div>
+        <div class="picklist"></div>
+        <div class="pickfoot">
+          <button class="pickclear" type="button">Write nowhere</button>
+          <button class="pickuse" type="button">Work here</button>
+        </div>
+      </div>
+
+      <div class="picker menu" id="modelmenu" hidden></div>
     </div>
+
   </div>
 
   <!-- What the product can do without the mouse. Nothing surfaced this before,
