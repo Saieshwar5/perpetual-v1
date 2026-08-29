@@ -28,7 +28,7 @@ function slugify(s: string): string {
  * session. It also makes the whole workspace path — the second watcher, the
  * panel, the run-a-row endpoint — testable with no model and no credentials.
  */
-function workspacePlan(ask: string, num: string): { say: string; command: string }[] {
+function workspacePlan(ask: string, num: string): { say: string; command?: string }[] {
   const id = `${num}-${slugify(ask)}`;
   const dir = `ui/pages/${id}`;
   const meta = JSON.stringify({ title: "Files", ask });
@@ -103,7 +103,40 @@ echo wrote`,
   ];
 }
 
-function plan(ask: string, num: string): { say: string; command: string }[] {
+/**
+ * The speech plan: no commands at all. plans/40.
+ *
+ * A short question gets a short answer, streamed straight from the "model" —
+ * lines that are blocks, which the speech channel validates, writes and
+ * renders as they arrive. This is the executable copy of rules.md §Speaking
+ * the same way the shell plan is the executable copy of §Writing a page: if
+ * the speech path breaks, `pnpm replay` breaks before any session does.
+ */
+function speechPlan(ask: string): { say: string; command?: string }[] {
+  return [{
+    say: 'Answering directly.\n' +
+      '{"kind":"prose","text":"' +
+      "This answer was STREAMED — no shell command wrote it. The model's own " +
+      "reply text carried these blocks, the controller validated each line and " +
+      "wrote it into the section for you, and the words appeared as they were " +
+      'generated."}\n' +
+      '{"kind":"note","text":"The shell is still how the agent works — reads ' +
+      'files, runs code, draws figures. Speaking just stopped requiring it.",' +
+      '"tone":"info"}\n' +
+      // A STRUCTURED block, streamed. Prose types itself; a chart cannot —
+      // half a chart is a false shape — so the client holds its footprint
+      // open with a skeleton until the data lands. plans/43. Exercised here
+      // so `pnpm replay` covers the path that has no words to preview.
+      '{"kind":"chart","values":[3,7,12,9],"labels":["Q1","Q2","Q3","Q4"],' +
+      '"caption":"Streamed as one line — the shape was reserved before the numbers arrived"}\n',
+  }];
+}
+
+function plan(ask: string, num: string): { say: string; command?: string }[] {
+  // Short question, short answer: the speech path, end to end.
+  if (/^\s*(what|who|when|where|is|does|can)\b/i.test(ask) && ask.length < 90) {
+    return speechPlan(ask);
+  }
   if (/\bfile|files|find\b/i.test(ask)) return workspacePlan(ask, num);
   const id = `${num}-${slugify(ask)}`;
   const dir = `ui/pages/${id}`;
@@ -215,6 +248,8 @@ export function createReplayRuntime(): Runtime {
               await sleep(24);
               yield { type: "text_delta", delta: word + " " };
             }
+            // A speech step has no command: the say WAS the work. plans/40.
+            if (!here.command) return;
             const call: ToolCall = {
               id: `replay-${index}`, name: "shell", args: { command: here.command },
             };

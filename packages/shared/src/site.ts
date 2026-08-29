@@ -37,6 +37,16 @@ export interface PageMeta {
   title: string;
   /** The user ask this page answers. Drives the rail's thread. */
   ask?: string;
+  /**
+   * A name for the SESSION, not for this page. plans/46.
+   *
+   * Written once, on the page where the work's subject first becomes clear.
+   * "What is this section?" and "what was this whole conversation about?" are
+   * different questions, and the second one used to be answered by borrowing
+   * the first page's answer to the first — which is how a nine-page session
+   * about resumes ended up called "Hii".
+   */
+  session?: string;
   /** Derived from `blocks`. See Tier. */
   tier: Tier;
   layout: Layout;
@@ -205,6 +215,40 @@ export interface SessionIndex {
    * Absent means the session writes only its own record.
    */
   workdir?: string;
+  /**
+   * Directories the reader has ALLOWED mid-session, on top of `workdir`.
+   *
+   * A session writes in its own workspace and nowhere else until the work
+   * turns out to need somewhere real — and then the agent asks with a `grant`
+   * block and the reader answers with a button that is chrome, never the
+   * agent's. Recorded here, beside `open` and `workdir`, for exactly the
+   * reason those are: the agent must not be able to widen its own reach.
+   *
+   * Absolute paths, held to the home directory, and they last as long as the
+   * session does. A grant is a decision about this piece of work, not a
+   * standing permission the reader would have to remember to take back.
+   */
+  grants?: string[];
+  /**
+   * Every time the reader moved this session's workspace, and where it stood
+   * in the site when they did. plans/47.
+   *
+   * The workspace used to be fixed once a session had written anything,
+   * because a section is a record of work done in a place and a place that
+   * moves underneath it makes two pages about different directories look
+   * identical. Moving is allowed now — grants had already made the writable
+   * set mutable — so the record carries the moves instead of forbidding them:
+   * `after` is how many pages existed at the time, which is where the chrome
+   * draws the line.
+   */
+  moves?: { at: string; after: number; from?: string; to?: string;
+    /** A grant the reader took back — drawn in the flow like a move is. */
+    revoked?: string }[];
+  /**
+   * How this session's name was arrived at, which decides whether it may
+   * still change. Absent means it has not earned one yet. plans/46.
+   */
+  named?: "derived" | "given";
   /** The model this session is talking to, when the reader has picked one. */
   model?: string;
   createdAt: string;

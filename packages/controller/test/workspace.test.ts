@@ -18,7 +18,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readApps, commandFor, AppWatcher } from "../src/apps.ts";
@@ -171,5 +171,60 @@ test("two workspaces are two workspaces", async () => {
   const { apps } = await readApps(d);
   assert.deepEqual(apps.map((a) => a.id), ["files", "mail"]);
   assert.deepEqual(apps.map((a) => a.title), ["Files", "Mail"]);
+  await rm(d, { recursive: true, force: true });
+});
+
+/* -------------------------------------------- runs that will actually run */
+
+test("a run naming an invented verb is a problem the agent hears about NOW", async () => {
+  // The real failure: rows saying `run: "show <file>"` for a helper that was
+  // never put anywhere, and the reader's click was the first thing to notice.
+  const d = await fixture();
+  await writeApp(d, "resumes", [
+    { kind: "rows", id: "list", items: [
+      { id: "a", title: "resume.pdf", run: "show /tmp/resume.pdf" },
+    ] },
+  ]);
+  const { problems } = await readApps(d);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0]!.message, /`show` is not a command/);
+  assert.match(problems[0]!.message, /files show/, "points at the two-word adapter form");
+  await rm(d, { recursive: true, force: true });
+});
+
+test("a helper shipped in the workspace directory passes — executable only", async () => {
+  const d = await fixture();
+  await writeApp(d, "resumes", [
+    { kind: "rows", id: "list", items: [
+      { id: "a", title: "resume.pdf", run: "show /tmp/resume.pdf" },
+    ] },
+  ]);
+  const helper = join(d, "ui", "apps", "resumes", "show");
+  await writeFile(helper, "#!/bin/sh\necho ok\n");
+
+  // Present but not executable: a different, actionable message.
+  const notExec = await readApps(d);
+  assert.equal(notExec.problems.length, 1);
+  assert.match(notExec.problems[0]!.message, /chmod \+x/);
+
+  await chmod(helper, 0o755);
+  const execd = await readApps(d);
+  assert.deepEqual(execd.problems, [], "an executable helper is a valid verb");
+  await rm(d, { recursive: true, force: true });
+});
+
+test("installed programs, builtins and shell-shaped commands are left alone", async () => {
+  const d = await fixture();
+  await writeApp(d, "files", [
+    { kind: "rows", id: "list", items: [
+      { id: "a", title: "fine", run: "cat /tmp/x | head -3" },
+      { id: "b", title: "builtin", run: "cd /tmp && ls" },
+      { id: "c", title: "env prefix", run: "LC_ALL=C sort /tmp/x" },
+      { id: "d", title: "a path", run: "./helper --flag" },
+      { id: "e", title: "not ours to parse", run: "\"$SOME_VAR\" x" },
+    ] },
+  ]);
+  const { problems } = await readApps(d);
+  assert.deepEqual(problems, []);
   await rm(d, { recursive: true, force: true });
 });

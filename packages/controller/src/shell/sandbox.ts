@@ -41,10 +41,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { toolsDir } from "../paths.ts";
 
 /** Where the session directory appears from inside the sandbox. */
 export const MOUNT = "/session";
+/** Where the agent's tool notes appear, every session, writable. */
+export const NOTES_MOUNT = "/perpetual/notes";
 
 /**
  * Where the agent's own programs appear, and where they come from.
@@ -59,8 +61,9 @@ export const MOUNT = "/session";
  * the program that edits its pages.
  */
 export const TOOLS_MOUNT = "/perpetual/bin";
-export const toolsDir = () =>
-  join(dirname(fileURLToPath(import.meta.url)), "..", "..", "sandbox-bin");
+// Where they come from is a packaging question, not a sandbox one. See
+// paths.ts: bwrap BINDS this directory, so it has to be a real one.
+export { toolsDir } from "../paths.ts";
 
 /**
  * Tool adapters: a recipe per CLI, and the scripts that go with it.
@@ -125,6 +128,12 @@ export const CREDENTIALS: Record<string, string> = {
   docker: ".docker/config.json",
   ssh: ".ssh",
   gnupg: ".gnupg",
+  netrc: ".netrc",
+  "git-https": ".git-credentials",
+  // Deliberately NOT here, though SECRETS hides them: browser profiles,
+  // keyrings, .password-store. Those are not "act as me in one service" —
+  // they are everything at once, and a single chip that hands over a whole
+  // keyring is not a choice anyone makes on purpose.
 };
 
 export interface SandboxConfig {
@@ -164,6 +173,28 @@ export interface SandboxConfig {
    * sections are sealed; a writable one would let a turn unseal itself.
    */
   sessionsRoot?: string;
+  /**
+   * The agent's own notebook about this machine's tools. plans/48.
+   *
+   * A host directory, bound writable at a stable path — the ONE writable
+   * place that survives the session, because what `pdftotext -layout` does is
+   * a fact about the machine, not about any conversation. Deliberately not
+   * configuration: a note cannot put anything on the PATH, cannot add a
+   * credential, cannot change what runs. Worst case it is wrong, and costs
+   * the agent one command to find out. Adapters stay read-only; this is the
+   * lab notebook beside them.
+   */
+  notesDir?: string;
+  /** How long a background job may live. Settings-fed; clamped in jobs.ts. */
+  jobMaxMs?: number;
+  /**
+   * Directories the READER allowed mid-session, on top of `workdir`. plans/45.
+   *
+   * Bound writable exactly like `workdir` is, and arriving by exactly the same
+   * route: a controller endpoint the agent cannot reach. The agent asks with a
+   * `grant` block; only the reader's click puts a path in this list.
+   */
+  grants?: string[];
   /** Real path to the built-in adapters, when there are any. */
   adapters?: string;
   /** Real path to the reader's own adapters, when they have some. */
@@ -209,8 +240,25 @@ export function bwrapAvailable(): boolean {
  * inside the sandbox even by `env`. Verified by a test, because the failure is
  * silent and total.
  */
+/**
+ * Where this session works when the reader has chosen nowhere. plans/45.
+ *
+ * Its OWN directory, inside its own record — so every session is born with a
+ * place it may do anything at all, and no two sessions share one. It used to
+ * be `~/perpetual`, one directory for every session that ever ran: work from
+ * a session last week sat in the way of work today, and deleting a session
+ * left its files behind with nothing to say whose they were.
+ *
+ * Inside the mount, so it needs no bind and cannot be reached from outside
+ * the sandbox; deleted with the session, because it IS the session.
+ */
+export const sessionWorkspace = (cfg: SandboxConfig): string =>
+  `${mountPath(cfg)}/workspace`;
+
 export function sandboxEnv(cfg: SandboxConfig): Record<string, string> {
-  const cwd = cfg.workdir ?? MOUNT;
+  // Every command starts in the record — see startDir. PWD has to agree with
+  // `--chdir` or the shell's first `pwd` disagrees with where it actually is.
+  const cwd = mountPath(cfg);
   return {
     // An adapter's `bin/` is on the PATH, so a recipe can say `mail list`
     // rather than a path — the scripts ARE the tool, as far as the agent is
@@ -228,10 +276,17 @@ export function sandboxEnv(cfg: SandboxConfig): Record<string, string> {
     // Where the record is written. Not HOME any more: the two were the same
     // thing only because there was nothing else in the namespace.
     PERPETUAL_SITE: MOUNT,
-    // The one place outside the record that can be written. Adapters read this
-    // rather than guessing, so `files find` searches where the reader is
-    // working instead of wherever the last `cd` happened to land.
-    ...(cfg.workdir ? { PERPETUAL_WORKDIR: cfg.workdir } : {}),
+    // Where this session works. The reader's chosen directory when they picked
+    // one, and otherwise the session's own — never nothing, so an agent asked
+    // to make a file always has somewhere to put it. Adapters read this rather
+    // than guessing, so `files find` searches where the work is.
+    PERPETUAL_WORKDIR: cfg.workdir ?? sessionWorkspace(cfg),
+    // Everywhere else this session may write, granted one directory at a time
+    // by the reader. Newline-free paths joined by `:`, like a PATH.
+    ...(cfg.grants?.length ? { PERPETUAL_GRANTS: cfg.grants.join(":") } : {}),
+    // The notebook. In unsafe mode there is no bind, so the env points at the
+    // real directory; under bwrap it points at the mount.
+    ...(cfg.notesDir ? { PERPETUAL_NOTES: cfg.unsafe ? cfg.notesDir : NOTES_MOUNT } : {}),
     // Tool-specific, and it earns the exception: gws defaults to a keyring
     // that talks to the session bus, and there is no session bus in here. A
     // credential the reader deliberately made visible should WORK, rather than
@@ -466,13 +521,21 @@ export function wrapCommand(
     // …and the one directory the reader chose, at its real path, so that
     // absolute paths in the agent's output mean something outside the sandbox.
     ...(cfg.workdir ? ["--bind", cfg.workdir, cfg.workdir] : []),
+    // Each directory the reader allowed. `--bind`, not `--bind-try`: a grant
+    // the reader approved that silently did not mount would leave the agent
+    // failing to write somewhere it had just been told it could.
+    ...(cfg.grants ?? []).flatMap((g) => ["--bind", g, g]),
+    // The notebook, writable at its stable path.
+    ...(cfg.notesDir ? ["--bind", cfg.notesDir, NOTES_MOUNT] : []),
     // …and the controller's own state pinned read-only ON TOP of it. The
     // sessions root sits inside the repo by default, so a reader who chooses
     // that repo as their working directory would otherwise be handing the
     // agent write access to session.json — the file that records what is
     // sealed. Last, because the last mount over a path is the one that wins.
     ...(cfg.sessionsRoot ? ["--ro-bind-try", cfg.sessionsRoot, cfg.sessionsRoot] : []),
-    "--chdir", cfg.workdir ?? MOUNT,
+    // The record, never the workspace — see startDir. A relative path in a
+    // command the prompt taught has to mean what the prompt said it means.
+    "--chdir", MOUNT,
   ];
   for (const [k, v] of Object.entries(sandboxEnv(cfg))) {
     args.push("--setenv", k, v);
@@ -504,17 +567,28 @@ export function mountPath(cfg: SandboxConfig): string {
 }
 
 /**
- * Where a command starts.
+ * Where a command starts. ALWAYS THE SESSION'S OWN RECORD.
  *
- * The reader's working directory when there is one, because that is what they
- * meant by choosing it — a session pointed at a project should answer `ls`
- * with that project, not with the machinery of its own record.
+ * It used to be the reader's working directory when there was one, on the
+ * reasoning that a session pointed at a project should answer `ls` with that
+ * project. That reasoning was wrong, and the way it was wrong is worth
+ * keeping written down: every command the prompt teaches for writing a page
+ * is RELATIVE — `mkdir -p ui/pages/001-x`, `cat >> ui/pages/…/page.ndjson`.
+ * Start the shell somewhere else and those paths resolve somewhere else, so
+ * the agent scattered `ui/pages/` directories into the reader's project and
+ * the session came out empty. Eight steps, zero pages, and nothing saying
+ * why.
+ *
+ * The workspace is a place the agent GOES, not where it lives. It is bound at
+ * its real path and named in `PERPETUAL_WORKDIR`, so reaching it is one `cd`
+ * or one absolute path — and the record stays the origin of every relative
+ * one.
  *
  * bwrap's `--chdir` is not enough on its own: the shell wrapper cds explicitly
  * so that `cd` can persist between commands, and that cd wins.
  */
 export function startDir(cfg: SandboxConfig): string {
-  return cfg.workdir ?? mountPath(cfg);
+  return mountPath(cfg);
 }
 
 export function describeSandbox(cfg: SandboxConfig): string {
@@ -524,7 +598,8 @@ export function describeSandbox(cfg: SandboxConfig): string {
   // What the reader needs from this string is one thing: where can it write.
   // Reading is broad and uninteresting; writing is the part with consequences,
   // so it is the part that gets named.
-  const writable = cfg.workdir ? `${MOUNT} + ${cfg.workdir}` : MOUNT;
+  const writable = [MOUNT, cfg.workdir, ...(cfg.grants ?? [])]
+    .filter(Boolean).join(" + ");
   const creds = cfg.credentials?.length ? ` · credentials: ${cfg.credentials.join(", ")}` : "";
   if (cfg.unsafe) return `UNSANDBOXED (PERPETUAL_UNSAFE=1)${sealed}`;
   return `bubblewrap · ${cfg.net ? "network ON" : "no network"} · ` +

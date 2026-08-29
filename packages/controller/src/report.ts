@@ -95,6 +95,19 @@ export interface SessionReport {
   fullyNamed: number;
   /** Pages where some blocks are named and some are not: the worst case. */
   partlyNamed: number;
+  /**
+   * Sections written WITHOUT a heading. plans/39 §4.5.
+   *
+   * The register, made countable. A heading used to be required, so this was
+   * always zero by construction; now it is the one number that says whether
+   * the agent actually varies how it replies or has simply kept writing
+   * articles out of habit. Counted, never judged — a session of twelve
+   * explanations should be twelve headings, and a session of quick questions
+   * should be none.
+   */
+  headless: number;
+  /** Sections of three blocks or fewer — the short-answer shape. */
+  brief: number;
   kinds: Record<string, number>;
   /** Turns that changed a page they did not create, and how. */
   amendments: Record<EditStyle, number>;
@@ -117,6 +130,7 @@ export interface Report {
 
 const emptyTotals = (): Report["totals"] => ({
   turns: 0, pages: 0, blocks: 0, namedBlocks: 0, fullyNamed: 0, partlyNamed: 0,
+  headless: 0, brief: 0,
   kinds: {}, amendments: { "page-tool": 0, append: 0, rewrite: 0, "hand-edited": 0 },
   amendmentTurns: 0, corrections: 0, superseded: 0, examples: [], stopped: {}, steps: [],
 });
@@ -140,7 +154,7 @@ export async function reportOn(store: SessionStore, ids?: string[]): Promise<Rep
         (b) => "text" in b && typeof b.text === "string" && b.text.includes(REPLAY_MARK),
       )),
       turns: turns.length, pages: site.pages.length,
-      blocks: 0, namedBlocks: 0, fullyNamed: 0, partlyNamed: 0,
+      blocks: 0, namedBlocks: 0, fullyNamed: 0, partlyNamed: 0, headless: 0, brief: 0,
       kinds: {},
       amendments: { "page-tool": 0, append: 0, rewrite: 0, "hand-edited": 0 },
       amendmentTurns: 0,
@@ -155,6 +169,8 @@ export async function reportOn(store: SessionStore, ids?: string[]): Promise<Rep
       s.namedBlocks += named;
       if (page.blocks.length && named === page.blocks.length) s.fullyNamed++;
       else if (named > 0) s.partlyNamed++;
+      if (page.blocks.length && page.blocks[0]!.kind !== "heading") s.headless++;
+      if (page.blocks.length && page.blocks.length <= 3) s.brief++;
       for (const b of page.blocks) s.kinds[b.kind] = (s.kinds[b.kind] ?? 0) + 1;
     }
 
@@ -202,6 +218,7 @@ export async function reportOn(store: SessionStore, ids?: string[]): Promise<Rep
     totals.turns += s.turns; totals.pages += s.pages;
     totals.blocks += s.blocks; totals.namedBlocks += s.namedBlocks;
     totals.fullyNamed += s.fullyNamed; totals.partlyNamed += s.partlyNamed;
+    totals.headless += s.headless; totals.brief += s.brief;
     totals.amendmentTurns += s.amendmentTurns;
     totals.corrections += s.corrections; totals.superseded += s.superseded;
     totals.examples.push(...s.examples);
@@ -242,6 +259,14 @@ export function format(r: Report): string {
     line("  Nothing to report yet. Run some real turns first:  pnpm dev");
     return out.join("\n");
   }
+
+  line();
+  line("REGISTER — does it vary how it replies, or write an article every time?");
+  line(`  no heading          ${bar(t.headless, t.pages)}  ${t.headless}/${t.pages}  ${pct(t.headless, t.pages)}`);
+  line(`  three blocks or few ${bar(t.brief, t.pages)}  ${t.brief}/${t.pages}  ${pct(t.brief, t.pages)}`);
+  line("  Neither number has a target. A session of explanations SHOULD be all");
+  line("  headings; a session of quick questions should be almost none. Both at");
+  line("  zero across many mixed sessions is the signal: the article habit held.");
 
   line();
   line("NAMES — can a page be updated one block at a time?");

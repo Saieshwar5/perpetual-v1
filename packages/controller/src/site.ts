@@ -90,6 +90,9 @@ function metaFrom(id: string, raw: unknown): { meta: Page; problems: Problem[] }
     // meta.json contributes to it.
     id, title, tier: 1, layout, blocks: [],
     ...(typeof r.ask === "string" && r.ask.trim() ? { ask: r.ask.trim() } : {}),
+    // A name for the SESSION, when the agent wrote one. plans/46.
+    ...(typeof r.session === "string" && r.session.trim()
+      ? { session: r.session.trim() } : {}),
   };
   return { meta, problems };
 }
@@ -219,25 +222,38 @@ async function readPage(pagesDir: string, id: string): Promise<{ page: Page; pro
     });
   }
 
-  // Structure. `heading` is the page's claim and `section` breaks a long
-  // explanation; without these two rules the model reaches for `heading` four
-  // times and the reader gets four 2.5rem headlines stacked down the page.
+  // Structure. AT MOST ONE heading, and if there is one it comes first.
+  // plans/39 §4.1.
+  //
+  // It used to be "exactly one", and that requirement was the article costume:
+  // a two-sentence reply had to wear a 2.5rem headline, so every answer —
+  // "what's the capital of Australia", "why is this crashing" — arrived
+  // dressed as a magazine piece. A short answer standing bare in the scroll is
+  // a finished reply, and the rule that forbade it was ours.
+  //
+  // The other half stays, and it is the half that was earned: the first real
+  // model run put FOUR heading blocks on one page, because the vocabulary had
+  // one word for two jobs. `section` is that second word, and one `heading`
+  // per page is what keeps it meaningful.
   if (blocks.length > 0) {
-    const first = blocks[0]!;
-    if (first.kind !== "heading") {
+    const heads = blocks.filter((b) => b.kind === "heading").length;
+    if (heads > 1) {
       problems.push({
         page: id,
-        message: `the first block is a \`${first.kind}\`. A page opens with its ` +
-                 "`heading` — one sentence stating the claim. Use `section` for breaks " +
-                 "further down.",
+        message: `${heads} \`heading\` blocks. A section has at most one — its claim. ` +
+                 "Use `section` for the breaks inside a long explanation.",
       });
     }
-    const extra = blocks.filter((b) => b.kind === "heading").length - 1;
-    if (extra > 0) {
+    // A heading that is not first is not a claim, it is a headline halfway
+    // down the page. `section` is the word for that.
+    if (heads > 0 && blocks[0]!.kind !== "heading") {
       problems.push({
         page: id,
-        message: `${extra + 1} \`heading\` blocks. A page has exactly one — its claim. ` +
-                 "Use `section` for the breaks inside a long explanation.",
+        message: "the `heading` is not the first block. A heading is the claim the " +
+                 `rest of the section backs, so it opens it — this one opens with a ` +
+                 `\`${blocks[0]!.kind}\`. Move it to the top, or make it a \`section\` ` +
+                 "if it was meant as a break. A section with NO heading is fine: a " +
+                 "short answer does not need one.",
       });
     }
   }

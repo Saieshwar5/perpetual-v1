@@ -1,0 +1,27 @@
+{
+  "name": "@perpetual/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:main": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=dist/main.cjs",
+    "build:preload": "esbuild src/preload.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=dist/preload.cjs",
+    "build:probe": "esbuild src/probe.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=dist/probe.cjs",
+    "build": "pnpm build:main && pnpm build:preload",
+    "probe": "pnpm build:probe && electron dist/probe.cjs",
+    "start": "electron dist/main.cjs",
+    "dev": "pnpm --filter @perpetual/client build && pnpm build && pnpm start",
+    "stage": "node --experimental-strip-types src/stage.ts",
+    "pack": "pnpm build && pnpm stage && electron-builder --config packaging/electron-builder.yml --linux",
+    "smoke": "node --experimental-strip-types src/smoke.ts"
+  },
+  "dependencies": {
+    "@perpetual/controller": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "43.4.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.0"
+  },
+  "main": "dist/main.cjs"
+}

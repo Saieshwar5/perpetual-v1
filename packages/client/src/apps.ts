@@ -1,25 +1,25 @@
 /**
- * The workspace panel — where you WORK with the agent, beside where you read
- * what it wrote.
+ * Workspaces, inline — cards in the one scroll, where everything else already
+ * is.
  *
- * The scroll is a record: sections, sealed, permanent. Some things are not
- * records. A list of files is something you work in — click one and it opens,
- * go back and the list returns, narrow the search and it changes under you.
- * Putting that in the scroll would mean either a mutable section (which the
- * seal forbids, correctly) or a new section per click (which is a transcript
- * of your own clicking, not a workspace).
+ * They used to live in a panel down the right side. The reasoning was sound —
+ * a workspace is the one surface allowed to change under you, and keeping it
+ * physically apart kept that distinction visible — but the price was a second
+ * place: its own chrome, three layout modes, and a whole "context" subsystem
+ * to disambiguate which surface a typed sentence was about. Two places to
+ * look, and a rule the reader had to learn.
  *
- * So it gets its own surface, beside the conversation rather than instead of
- * it: half the questions you ask are ABOUT what is in the panel, and both have
- * to be visible for that to work. It uses the abundant dimension — width —
- * which is the same reason the chrome has always lived down the side.
+ * One rule now: EVERYTHING THE AGENT DOES APPEARS IN THE FLOW, IN ORDER. A
+ * workspace renders as a live card inside the turn that opened it — bordered
+ * and marked, because unlike the sealed prose around it this part can change —
+ * and updates in place as the agent rewrites its view. The seal is untouched:
+ * the card is still `ui/apps/<name>/view.ndjson`, a separate file drawn in a
+ * different spot, never blocks smuggled onto a page.
  *
- * Two ways to touch a row, and the difference is the whole performance story:
+ * Two ways to touch a row, unchanged, and still the whole performance story:
  *
  *   IT CARRIES A COMMAND — the controller runs it and hands back the new view.
- *   No model, no cost, about as fast as the command. Opening a file you can
- *   already see needs no judgement, and paying a model turn for it is what
- *   makes a generated app feel like a chatbot in a costume.
+ *   No model, no cost, about as fast as the command.
  *
  *   IT DOES NOT — the pick becomes a turn, exactly like a choice on a page.
  *   The model comes back for the things that need judgement.
@@ -28,15 +28,19 @@ import { renderBlock, type BlockActions } from "./render.ts";
 import type { AppView, Selection } from "@perpetual/shared/site";
 import type { Choice } from "@perpetual/shared/blocks";
 
-export class AppPanel {
-  private root: HTMLElement;
-  private titleEl: HTMLElement;
-  private viewEl: HTMLElement;
-  private bodyEl: HTMLElement;
-  private noteEl: HTMLElement;
-  private apps = new Map<string, AppView>();
-  private current: string | null = null;
-  private tabs: HTMLElement;
+interface Card {
+  view: AppView;
+  root: HTMLElement;
+  body: HTMLElement;
+  note: HTMLElement;
+}
+
+export class AppCards {
+  private cards = new Map<string, Card>();
+  /** Where a new card lands: the current turn. Asked at creation, not kept. */
+  private host: () => HTMLElement;
+  /** The session a picture would be served from. Asked, never held: it changes. */
+  private session: () => string;
 
   /** A row that carries a command: run it, and show whatever the view became. */
   onRun: (app: string, block: string, option: string,
@@ -44,77 +48,133 @@ export class AppPanel {
   /** A row that does not: ask the agent, carrying what was picked. */
   onAsk: (selection: Selection) => void = () => {};
   onClose: (app: string) => void = () => {};
-  /** The panel opened or closed, so the layout can make room for it. */
-  onLayout: (open: boolean) => void = () => {};
 
-  constructor(root: HTMLElement) {
-    this.root = root;
-    this.tabs = root.querySelector(".ptabs")!;
-    this.titleEl = root.querySelector(".ptitle")!;
-    this.viewEl = root.querySelector(".pview")!;
-    this.bodyEl = root.querySelector(".pbody")!;
-    this.noteEl = root.querySelector(".pnote")!;
-
-    root.querySelector(".pclose")!.addEventListener("click", () => {
-      if (this.current) this.onClose(this.current);
-    });
-    root.querySelector(".pwide")!.addEventListener("click", () => {
-      root.classList.toggle("wide");
-    });
+  constructor(host: () => HTMLElement, session: () => string) {
+    this.host = host;
+    this.session = session;
   }
 
-  get open() { return this.apps.size > 0; }
-  get activeId() { return this.current; }
+  get open() { return this.cards.size > 0; }
 
   /** One workspace by id, for chrome that needs to name it. */
-  get(id: string): AppView | undefined { return this.apps.get(id); }
+  get(id: string): AppView | undefined { return this.cards.get(id)?.view; }
 
-  /** Everything the session has open. Used on load and after a turn. */
+  /** Everything the session has open. Used on load, after the pages are in. */
   setAll(apps: AppView[]) {
-    const was = this.open;
-    this.apps = new Map(apps.map((a) => [a.id, a]));
-    if (!this.current || !this.apps.has(this.current)) {
-      this.current = apps[0]?.id ?? null;
+    for (const id of [...this.cards.keys()]) {
+      if (!apps.some((a) => a.id === id)) this.remove(id);
     }
-    this.paint();
-    if (was !== this.open) this.onLayout(this.open);
+    for (const a of apps) this.set(a);
   }
 
-  /** One workspace appeared or changed. */
-  set(app: AppView, opts: { focus?: boolean } = {}) {
-    const was = this.open;
-    this.apps.set(app.id, app);
-    if (opts.focus !== false || !this.current) this.current = app.id;
-    this.paint();
-    if (was !== this.open) this.onLayout(this.open);
+  /** One workspace appeared or changed. In place, never a re-mount. */
+  set(app: AppView) {
+    let card = this.cards.get(app.id);
+    if (!card) {
+      card = this.makeCard(app);
+      this.cards.set(app.id, card);
+      this.host().append(card.root);
+    }
+    card.view = app;
+    this.paint(card);
   }
 
   remove(id: string) {
-    const was = this.open;
-    this.apps.delete(id);
-    if (this.current === id) this.current = [...this.apps.keys()][0] ?? null;
-    this.paint();
-    if (was !== this.open) this.onLayout(this.open);
+    const card = this.cards.get(id);
+    if (!card) return;
+    card.root.remove();
+    this.cards.delete(id);
   }
 
   clear() {
-    const was = this.open;
-    this.apps.clear();
-    this.current = null;
-    this.paint();
-    if (was) this.onLayout(false);
+    for (const c of this.cards.values()) c.root.remove();
+    this.cards.clear();
   }
 
   /** What the last command said, when it failed. Never a terminal. */
-  note(text: string, bad = false) {
-    this.noteEl.textContent = text;
-    this.noteEl.classList.toggle("bad", bad);
-    this.noteEl.hidden = !text;
+  note(app: string, text: string, bad = false) {
+    const card = this.cards.get(app);
+    if (!card) return;
+    card.note.textContent = text;
+    card.note.classList.toggle("bad", bad);
+    card.note.hidden = !text;
   }
 
-  /** A command is running, or a turn is: the panel says so rather than freezing. */
+  /** A command is running, or a turn is: the cards say so rather than freezing. */
   working(on: boolean) {
-    this.root.classList.toggle("busy", on);
+    for (const c of this.cards.values()) c.root.classList.toggle("busy", on);
+  }
+
+  /**
+   * What to ask if the controller reports that nothing ran.
+   *
+   * A row without a command is not broken — it is a question for the agent,
+   * and the answer to "nothing ran" is to ask it rather than to do nothing.
+   */
+  private pendingAsk: { app: string; blockId: string; option: string; label: string } | null = null;
+
+  /** Called by the caller when `/act` came back saying it ran nothing. */
+  askInstead() {
+    const p = this.pendingAsk;
+    this.pendingAsk = null;
+    if (!p) return;
+    const view = this.cards.get(p.app)?.view;
+    if (!view) return;
+    const prompt = view.blocks.find((b) => b.id === p.blockId && b.kind === "confirm");
+    this.onAsk({
+      app: p.app, page: p.app, control: "choice",
+      block: p.blockId, option: p.option, label: p.label,
+      ...(prompt && prompt.kind === "confirm" ? { prompt: prompt.prompt } : {}),
+    });
+  }
+
+  /** A confirmation declined. Nothing runs, and nobody is asked. */
+  onCancel: (app: string, block: string) => void = () => {};
+
+  private makeCard(app: AppView): Card {
+    const root = document.createElement("section");
+    root.className = "appcard";
+    root.dataset.app = app.id;
+
+    const box = document.createElement("div");
+    box.className = "acard";
+
+    const head = document.createElement("header");
+    head.className = "ahead";
+    const dot = document.createElement("span");
+    dot.className = "adot";
+    const title = document.createElement("span");
+    title.className = "atitle";
+    const view = document.createElement("span");
+    view.className = "aview";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "aclose";
+    close.setAttribute("aria-label", "Close the workspace");
+    close.textContent = "✕";
+    close.addEventListener("click", () => this.onClose(app.id));
+    head.append(dot, title, view, close);
+
+    const body = document.createElement("div");
+    body.className = "pdoc";
+    const note = document.createElement("div");
+    note.className = "pnote";
+    note.hidden = true;
+
+    box.append(head, body, note);
+    root.append(box);
+    return { view: app, root, body, note };
+  }
+
+  private paint(card: Card) {
+    const app = card.view;
+    card.root.querySelector(".atitle")!.textContent = app.title;
+    const viewEl = card.root.querySelector<HTMLElement>(".aview")!;
+    viewEl.textContent = app.view ?? "";
+    viewEl.hidden = !app.view;
+
+    const acts = this.actionsFor(app);
+    card.body.replaceChildren(...app.blocks.map((b) => renderBlock(b, acts)));
   }
 
   private actionsFor(app: AppView): BlockActions {
@@ -125,8 +185,16 @@ export class AppPanel {
       answered: () => null,
       picked: () => null,
       next: () => {},
+      // A workspace shows pictures out of its own directory, the same way a
+      // page does out of its. Access requests belong on the record, not on a
+      // surface that is about to be rewritten — so no `allow` here.
+      asset: (src) =>
+        `/sessions/${this.session()}/asset?app=${encodeURIComponent(app.id)}&file=${
+          encodeURIComponent(src)}`,
       choose: (b: Choice, o: { id: string; label: string }) => {
         if (!b.id) return;
+        // A multi answer is a joined id that matches no single option, so it
+        // falls through to the agent — which is where several picks belong.
         const opt = b.options.find((x) => x.id === o.id);
         if (opt?.run) { this.onRun(app.id, b.id, o.id); return; }
         this.onAsk({
@@ -145,7 +213,7 @@ export class AppPanel {
       act: (blockId, option, label) => {
         if (option === "cancel") { this.onCancel(app.id, blockId); return; }
         this.onRun(app.id, blockId, option);
-        this.pendingAsk = { blockId, option, label };
+        this.pendingAsk = { app: app.id, blockId, option, label };
       },
 
       submit: (blockId, values) => {
@@ -153,71 +221,12 @@ export class AppPanel {
         // A form with no command is a form the agent fills in for you: what was
         // typed has to travel with the question, or it is lost.
         this.pendingAsk = {
-          blockId, option: "submit",
+          app: app.id, blockId, option: "submit",
           label: Object.entries(values)
             .filter(([, v]) => v !== "" && v !== false)
             .map(([k, v]) => `${k}: ${v === true ? "yes" : v}`).join(" · ") || "submitted",
         };
       },
     };
-  }
-
-  /**
-   * What to ask if the controller reports that nothing ran.
-   *
-   * A row without a command is not broken — it is a question for the agent,
-   * and the answer to "nothing ran" is to ask it rather than to do nothing.
-   */
-  private pendingAsk: { blockId: string; option: string; label: string } | null = null;
-
-  /** Called by the caller when `/act` came back saying it ran nothing. */
-  askInstead() {
-    const p = this.pendingAsk;
-    this.pendingAsk = null;
-    const app = this.current ? this.apps.get(this.current) : undefined;
-    if (!p || !app) return;
-    const prompt = app.blocks.find((b) => b.id === p.blockId && b.kind === "confirm");
-    this.onAsk({
-      app: app.id, page: app.id, control: "choice",
-      block: p.blockId, option: p.option, label: p.label,
-      ...(prompt && prompt.kind === "confirm" ? { prompt: prompt.prompt } : {}),
-    });
-  }
-
-  /** A confirmation declined. Nothing runs, and nobody is asked. */
-  onCancel: (app: string, block: string) => void = () => {};
-
-
-
-  private paint() {
-    this.root.hidden = !this.open;
-    if (!this.open) { this.root.classList.remove("wide"); return; }
-
-    // Tabs only when there is a choice to make. One workspace needs no tabs,
-    // and an empty tab strip is chrome asking to be noticed for nothing.
-    const many = this.apps.size > 1;
-    this.tabs.hidden = !many;
-    if (many) {
-      this.tabs.replaceChildren(...[...this.apps.values()].map((a) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = a.id === this.current ? "ptab on" : "ptab";
-        b.textContent = a.title;
-        b.addEventListener("click", () => { this.current = a.id; this.paint(); });
-        return b;
-      }));
-    }
-
-    const app = this.current ? this.apps.get(this.current) : undefined;
-    if (!app) return;
-    this.titleEl.textContent = app.title;
-    this.viewEl.textContent = app.view ?? "";
-    this.viewEl.hidden = !app.view;
-
-    const acts = this.actionsFor(app);
-    const doc = document.createElement("div");
-    doc.className = "pdoc";
-    for (const b of app.blocks) doc.append(renderBlock(b, acts));
-    this.bodyEl.replaceChildren(doc);
   }
 }

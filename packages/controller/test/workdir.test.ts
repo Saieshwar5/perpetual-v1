@@ -114,8 +114,13 @@ test("a working directory is bound at its REAL path", () => {
   assert.ok(at > 0);
   assert.equal(args[at - 1], "--bind");
   assert.equal(args[at + 1], work, "bound at its own path, not remapped");
-  assert.equal(startDir({ ...BASE, workdir: work }), work);
-  assert.equal(sandboxEnv({ ...BASE, workdir: work }).PERPETUAL_WORKDIR, work);
+  // But it is NOT where the shell starts. Every page-writing command the
+  // prompt teaches is relative to the record, so starting anywhere else wrote
+  // `ui/pages/` into the reader's project and left the session empty.
+  assert.equal(startDir({ ...BASE, workdir: work }), "/session",
+    "the record is the origin of every relative path, whatever is chosen");
+  assert.equal(sandboxEnv({ ...BASE, workdir: work }).PERPETUAL_WORKDIR, work,
+    "the workspace is reached by name, not by being stood in");
 });
 
 test("the sessions root is pinned read-only after the working directory", () => {

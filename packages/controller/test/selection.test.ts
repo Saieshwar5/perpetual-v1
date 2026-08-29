@@ -63,6 +63,34 @@ test("a door repeated in one block is one door the reader can click twice", () =
   );
 });
 
+/* ----------------------------------------------------------------- multi */
+
+test("a multi choice is valid, with a label for the button that confirms it", () => {
+  const v = validateBlock(choice({ multi: true, submit: "Delete these" }));
+  assert.equal(v.ok, true);
+});
+
+test("multi is a yes or a silence, not a count", () => {
+  assert.match(err(choice({ multi: 3 })), /`multi` is `true` or absent/);
+});
+
+test("a submit button on a single pick is a button with nothing to confirm", () => {
+  assert.match(err(choice({ submit: "Go" })), /only means something on a multi/);
+});
+
+test("a command cannot ride on a multi option — the picks answer together", () => {
+  assert.match(
+    err(choice({
+      multi: true,
+      options: [
+        { id: "a", label: "one", run: "file-detail a" },
+        { id: "b", label: "two" },
+      ],
+    })),
+    /cannot sit on a multi choice/,
+  );
+});
+
 /* ------------------------------------------------------------ addressing */
 
 test("the same question on two pages is two different doors", () => {
@@ -94,6 +122,18 @@ test("a picked option reaches the agent as its own token, not as prose", () => {
   assert.match(msg, /did not type this/);
   assert.match(msg, /`which-file`/, "says which control was answered");
   assert.match(msg, /`b`/, "says which option, by the id the agent wrote");
+  assert.match(msg, /continue the work it was blocking/);
+});
+
+test("a multi answer is spelled out to the agent as a list of its own ids", () => {
+  const selection: Selection = {
+    page: "003-find-report", control: "choice", block: "which-file",
+    option: "a,b", label: "report-2025.pdf, report-final.pdf",
+    prompt: "Which one did you mean?",
+  };
+  const msg = turnMessage({ ask: "Which one did you mean? — both reports", site, pastAsks: [], selection });
+
+  assert.match(msg, /`a`, `b`/, "each id readable on its own, not a token with commas in it");
   assert.match(msg, /continue the work it was blocking/);
 });
 

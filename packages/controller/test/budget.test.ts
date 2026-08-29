@@ -17,8 +17,13 @@ import { bwrapAvailable } from "../src/shell/sandbox.ts";
 
 const skip = !bwrapAvailable() ? "bubblewrap is not installed" : false;
 
-/** A model that never stops asking for commands, and records what it is told. */
-function endless(results: string[]) {
+/**
+ * A model that never stops asking for commands, and records what it is told.
+ * The command VARIES per step, deliberately: an agent that runs the identical
+ * command forever is caught by the repeat detector long before the cap, which
+ * is its own test below — this stub exists to reach the backstop.
+ */
+function endless(results: string[], command: (n: number) => string = (n) => `echo working ${n}`) {
   return {
     modelId: "endless", providerId: "endless",
     conversation: () => ({
@@ -26,7 +31,8 @@ function endless(results: string[]) {
       toolResult(_id: string, _n: string, text: string) { results.push(text); },
       step: () => Object.assign((async function* () { /* no text */ })(), {
         result: async () => ({
-          calls: [{ id: `c${results.length}`, name: "shell", args: { command: "echo working" } }],
+          calls: [{ id: `c${results.length}`, name: "shell",
+            args: { command: command(results.length) } }],
           usage: { input: 0, output: 0, cacheRead: 0, costUsd: 0 }, stopReason: "toolUse",
         }),
       }),
@@ -50,7 +56,7 @@ test("an agent that never stops is cut off, and the turn says so", { skip }, asy
 
   assert.equal(end.stopped, "steps", "the turn reports WHY it ended");
   assert.equal(summary.stopped, "steps", "and the transcript records it");
-  assert.equal(end.steps, 22);
+  assert.equal(end.steps, 40, "a backstop, not a policy — see plans/48");
 
   await rm(home, { recursive: true, force: true });
 });
@@ -78,6 +84,54 @@ test("the agent is warned before it runs out, through the channel it acts on", {
 
   // Early commands carry no note at all — a countdown that never stops is noise.
   assert.equal(results.slice(0, 15).some((r) => r.includes("left this turn")), false);
+
+  await rm(home, { recursive: true, force: true });
+});
+
+test("the same command with the same result is told at 2 and stopped at 3", { skip }, async () => {
+  // The failure the step cap could never see: not too much work, but the same
+  // non-work over and over. Eighteen repeats used to burn eighteen steps.
+  const home = await mkdtemp(join(tmpdir(), "perp-stuck-"));
+  const store = new SessionStore(home);
+  const s = await store.create();
+  const results: string[] = [];
+
+  let end: { stopped?: string; steps?: number } = {};
+  const stream = runTurn({
+    ask: "loop", runtime: endless(results, () => "echo the same thing") as never,
+    sandbox: { root: store.siteDir(s.id), net: false, unsafe: false }, pastAsks: [],
+  });
+  for await (const ev of stream) if (ev.type === "turn_end") end = { stopped: ev.stopped, steps: ev.usage.steps };
+  const summary = await stream.summary;
+
+  assert.equal(end.stopped, "stuck");
+  assert.equal(summary.stopped, "stuck");
+  assert.equal(results.length, 3, "three identical runs is an answer, not a budget");
+  assert.ok(results.some((r) => r.includes("run that exact command before")),
+    "told before stopped, through the channel it acts on");
+
+  await rm(home, { recursive: true, force: true });
+});
+
+test("failing differently every time is told at 3 and stopped at 6", { skip }, async () => {
+  const home = await mkdtemp(join(tmpdir(), "perp-fail-"));
+  const store = new SessionStore(home);
+  const s = await store.create();
+  const results: string[] = [];
+
+  let end: { stopped?: string; steps?: number } = {};
+  const stream = runTurn({
+    // A DIFFERENT failure each step, so the repeat detector stays quiet and
+    // the failure streak is what fires.
+    ask: "fail", runtime: endless(results, (n) => `ls /nowhere-${n}`) as never,
+    sandbox: { root: store.siteDir(s.id), net: false, unsafe: false }, pastAsks: [],
+  });
+  for await (const ev of stream) if (ev.type === "turn_end") end = { stopped: ev.stopped, steps: ev.usage.steps };
+
+  assert.equal(end.stopped, "stuck");
+  assert.equal(results.length, 6, "six failures ran, and no more");
+  assert.ok(results.some((r) => r.includes("failed commands in a row")),
+    "the streak is named while there is still room to change course");
 
   await rm(home, { recursive: true, force: true });
 });

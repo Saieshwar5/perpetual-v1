@@ -169,7 +169,11 @@ test("a page that goes away stops being remembered", async () => {
 
 test("problems survive the cache — a stale page does not go quiet", async () => {
   const { root, dir } = await site();
-  await writeFile(join(dir, "page.ndjson"), '{"kind":"prose","text":"No heading first."}\n');
+  // Two headings — a problem that is still a problem. This used to be "no
+  // heading", which plans/39 §4.1 made legal; the test is about the CACHE, so
+  // it only ever needed some page the validator complains about.
+  await writeFile(join(dir, "page.ndjson"),
+    '{"kind":"heading","text":"one"}\n{"kind":"heading","text":"two"}\n');
   const cache: SiteCache = new Map();
   const first = await readSite(root, cache);
   const again = await readSite(root, cache);

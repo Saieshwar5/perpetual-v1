@@ -20,7 +20,6 @@ import { createShell } from "../src/shell/tool.ts";
 import { bwrapAvailable } from "../src/shell/sandbox.ts";
 
 const skip = !bwrapAvailable() ? "bubblewrap is not installed" : false;
-const MARK = String.fromCharCode(1);
 
 let root: string;
 let sh: ReturnType<typeof createShell>;
@@ -79,9 +78,16 @@ test("a chosen working directory is writable, and it is the only addition", { sk
   const outside = await mkdtemp(join(tmpdir(), "perp-outside-"));
   const w = createShell({ root, net: false, unsafe: false, workdir: work });
 
-  const there = await w.run({ command: "pwd; echo yes > made.txt && cat made.txt" });
-  assert.match(there.text, new RegExp(work), "a command starts where the reader is working");
-  assert.equal(await readFile(join(work, "made.txt"), "utf8"), "yes\n");
+  // A command starts in the RECORD, whatever workspace was chosen: every
+  // page-writing command the prompt teaches is relative, so the origin of a
+  // relative path must not move. The workspace is reached by name.
+  const there = await w.run({
+    command: `pwd; cd "$PERPETUAL_WORKDIR" && echo yes > made.txt && cat made.txt`,
+  });
+  assert.match(there.text, /^\/session/m, "the record is where a command begins");
+  assert.match(there.text, /yes/);
+  assert.equal(await readFile(join(work, "made.txt"), "utf8"), "yes\n",
+    "and the chosen directory is fully writable once you are in it");
 
   // Choosing one directory does not quietly open anywhere else. A neighbour in
   // /tmp does not even exist inside — /tmp is a fresh tmpfs — and a real path
@@ -126,15 +132,14 @@ test("network off means no network AND no resolver", { skip }, async () => {
   assert.match(r.text, /NO-DNS/);
 });
 
-test("cd persists between commands, exports do not", { skip }, async () => {
+test("nothing persists between commands — not cd, not exports", { skip }, async () => {
   await sh.run({ command: "cd /session/ui/pages" });
   const r = await sh.run({ command: "pwd" });
-  assert.match(r.text, /\/session\/ui\/pages/);
+  assert.match(r.text, /^\/session$/m, "the tool description promises exactly this");
 
   await sh.run({ command: "export SECRET=abc" });
   const e = await sh.run({ command: 'echo "[${SECRET:-unset}]"' });
-  assert.match(e.text, /\[unset\]/, "the tool description promises exactly this");
-  await sh.run({ command: "cd /session" });
+  assert.match(e.text, /\[unset\]/);
 });
 
 test("a timeout kills the whole process tree and still returns output", { skip }, async () => {
@@ -166,13 +171,13 @@ test("stderr is interleaved with stdout in shell order", { skip }, async () => {
   assert.match(r.text, /one\ntwo\nthree/);
 });
 
-test("the cwd marker never reaches the reader", { skip }, async () => {
-  const r = await sh.run({ command: "echo visible" });
-  assert.ok(!r.text.includes(MARK), "not in the result");
-  let streamed = "";
-  await sh.run({ command: "echo streamed", onOutput: (c) => { streamed += c; } });
-  assert.ok(!streamed.includes(MARK), "not in the live stream either");
-  assert.match(streamed, /streamed/);
+test("a cd binds only its own command — the next one starts back at the record", { skip }, async () => {
+  // The convenience that put a page into the reader's workspace: cd used to
+  // carry, the prompt said it did not, and the agent's bare relative write
+  // went wherever the previous command had wandered.
+  await sh.run({ command: "cd /tmp" });
+  const r = await sh.run({ command: "pwd" });
+  assert.match(r.text, /^\/session$/m, "started fresh in the record");
 });
 
 /* --------------------------------------------------- the published record */

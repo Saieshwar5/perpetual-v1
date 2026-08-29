@@ -24,15 +24,16 @@ import { appendBlock, renderBlock, type BlockActions } from "./render.ts";
 import { runTurn, type WireEvent } from "./stream.ts";
 import { Flow } from "./flow.ts";
 import { Sidebar } from "./side.ts";
-import { AppPanel } from "./apps.ts";
+import { AppCards } from "./apps.ts";
 import { Composer } from "./composer.ts";
 import { mountSettings, load as loadSettings } from "./settings.ts";
 import { measureFlow } from "./measure.ts";
-import { describeCommand, activityLine } from "./activity.ts";
+import { describeCommand } from "./activity.ts";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
 import type { Anchor, AppView, Page, Selection, Site, SessionIndex }
   from "@perpetual/shared/site";
 import type { RenderReport } from "@perpetual/shared/render";
+import type { Block } from "@perpetual/shared/blocks";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -44,12 +45,17 @@ const sideHost = $("side");
 
 const flow = new Flow(flowHost);
 const side = new Sidebar(sideHost, $("sessions"), $<HTMLInputElement>("sidesearch"));
-const panel = new AppPanel($("apppanel"));
-const composer = new Composer($("pill"), $("floathost"));
+// Workspaces render as live cards in the flow, inside the current turn —
+// the same host the run notice settles into, asked at creation time.
+const panel = new AppCards(() => noticeHost() ?? flowHost, () => sessionId ?? "");
+const floatHost = $("floathost");
+const composer = new Composer($("pill"), floatHost);
 
 let sessionId: string | null = null;
 let pages: Page[] = [];
 let think = "";
+/** The running step's output tail, attached to its row only if it fails. */
+let lastOutput = "";
 let turn: AbortController | null = null;
 /** Did the reader ask anything in this session while it was open? */
 let attempted = false;
@@ -86,6 +92,14 @@ function actionsFor(page: string): BlockActions {
     // session from before the key changed still shows what was taken.
     answered: (q) => answered[doorKey(page, q)] ?? answered[q] ?? null,
     picked: (block) => chosen[choiceKey(page, block)] ?? null,
+
+    // A picture lives beside the page that shows it; the controller serves it
+    // by name out of that directory.
+    asset: (src) =>
+      `/sessions/${sessionId}/asset?page=${encodeURIComponent(page)}&file=${
+        encodeURIComponent(src)}`,
+    granted: (path) => grants.includes(path),
+    allow: (path) => void allowDirectory(path),
 
     // A door the agent offered. Clicking it still asks the question — that is
     // what a door IS — but it now says so: which page, which question.
@@ -198,7 +212,11 @@ function openPendingTurn(ask: string) {
   turn.append(askBubble(ask));
   flowHost.append(turn);
   pendingTurn = turn;
-  flow.toEnd();
+  // To the TOP, not to the foot. The question the reader just sent belongs at
+  // the top of the view with the answer filling in below it — sent to the foot
+  // it lands against the composer and the page then creeps upward as blocks
+  // arrive. plans/41.
+  flow.toTopOf(turn);
 }
 
 /** Nothing came of it, or something did — either way it stops being pending. */
@@ -231,7 +249,6 @@ function addPage(page: Page, opts: { goto?: boolean } = {}) {
   root.querySelector<HTMLElement>(".doc")!.dataset.blocks = String(page.blocks.length);
   flow.add({ id: page.id, root: turn });
   pages.push(page);
-  paintSide();
   // A section that has just been opened is the one the reader wants to watch
   // being written, and in a flow that is a scroll rather than a page turn.
   if (opts.goto) flow.toEnd();
@@ -253,7 +270,7 @@ function repaintControls() {
     if (!doc) continue;
     const acts = actionsFor(page.id);
     for (const [i, b] of page.blocks.entries()) {
-      if (b.kind !== "next" && b.kind !== "choice") continue;
+      if (b.kind !== "next" && b.kind !== "choice" && b.kind !== "grant") continue;
       doc.children[i]?.replaceWith(renderBlock(b, acts));
     }
   }
@@ -367,22 +384,7 @@ function scheduleReport() {
   reportTimer = setTimeout(reportRender, REPORT_SETTLE_MS) as unknown as number;
 }
 
-/**
- * The sidebar's picture of the session being read.
- *
- * Labelled by the reader's own question rather than the agent's title for its
- * answer, for the same reason the rail was: somebody looking for something
- * remembers what they asked, not the three words the agent chose.
- */
-function paintSide() {
-  side.setSections(
-    pages.map((p) => ({ id: p.id, label: p.ask || p.title })),
-    flow.activeId,
-  );
-}
-
 flow.onChange = (i, id) => {
-  side.setActiveSection(id);
   // Scrolling out of the section the aim lives in drops it to that section. A
   // block the reader has scrolled past is a reminder they can go back to; one
   // in a section they have LEFT is a claim about something they are no longer
@@ -397,30 +399,6 @@ flow.onChange = (i, id) => {
 flow.onScroll = () => placeComposer();
 
 /**
- * A workspace opening or closing changes the frame the site has, so the site
- * has to be told. The sidebar collapses to its strip at the same time: three
- * columns of chrome and content do not fit a laptop, and the one that can be
- * spared is the one holding a list you are not currently reading.
- */
-panel.onLayout = (open) => {
-  // A context pointing at a workspace that is no longer on screen is worse
-  // than none: the reader would be typing into something they cannot see.
-  if (!open) setContext(null);
-  else if (!context && panel.activeId) setContext(panel.activeId);
-  appEl.dataset.panel = open ? "1" : "";
-  if (open && document.documentElement.dataset.side !== "min") {
-    document.documentElement.dataset.side = "min";
-    sideWasWide = true;
-  } else if (!open && sideWasWide) {
-    document.documentElement.dataset.side = "";
-    sideWasWide = false;
-  }
-  placeComposer();
-};
-/** Did WE collapse the sidebar to make room? Only then may we put it back. */
-let sideWasWide = false;
-
-/**
  * A row that carries its own command. No model, no turn, no cost — the
  * controller runs it in the same sandbox and hands back what the view became.
  */
@@ -430,7 +408,7 @@ async function runRow(
 ) {
   if (!sessionId || composer.busy) return;
   panel.working(true);
-  panel.note("");
+  panel.note(app, "");
   try {
     const r = await fetch(`/sessions/${sessionId}/act`, {
       method: "POST",
@@ -441,7 +419,7 @@ async function runRow(
       ran?: boolean; exitCode?: number; output?: string;
       app?: AppView | null; error?: string;
     };
-    if (out.error) { panel.note(out.error, true); return; }
+    if (out.error) { panel.note(app, out.error, true); return; }
     if (out.app) panel.set(out.app);
     // Nothing ran, which is not a failure: a row or a form without a command is
     // a question for the agent, and asking it is what the reader meant.
@@ -449,10 +427,10 @@ async function runRow(
     // A command that failed says so, with the tail that explains it. Silence
     // would look exactly like a row that does nothing.
     if (out.ran && out.exitCode !== 0) {
-      panel.note(out.output?.trim() || `that did not work (exit ${out.exitCode})`, true);
+      panel.note(app, out.output?.trim() || `that did not work (exit ${out.exitCode})`, true);
     }
   } catch (e) {
-    panel.note(e instanceof Error ? e.message : String(e), true);
+    panel.note(app, e instanceof Error ? e.message : String(e), true);
   } finally {
     panel.working(false);
   }
@@ -462,7 +440,7 @@ panel.onRun = (app, block, option, values) => void runRow(app, block, option, va
 
 // Declining a confirmation is a real answer: nothing runs, nobody is asked,
 // and saying so is better than a button that appears to do nothing.
-panel.onCancel = () => panel.note("Left as it was.");
+panel.onCancel = (app) => panel.note(app, "Left as it was.");
 
 panel.onAsk = (selection) => {
   pendingSelection = selection;
@@ -484,6 +462,19 @@ const picker = $("picker");
 const modelMenu = $("modelmenu");
 
 let workdir: string | null = null;
+/**
+ * Directories the reader has ALLOWED this session, on top of `workdir`.
+ * plans/45. Set only by the controller's answer — never from a block.
+ */
+let grants: string[] = [];
+/**
+ * Where this session's workspace has MOVED, and how far in it moved. plans/47.
+ *
+ * The picker used to lock the moment a session wrote a page. What it was
+ * protecting is real — two sections about two different `x.ts` look identical
+ * — but the answer is to say where the work moved, not to forbid moving.
+ */
+let moves: SessionIndex["moves"] = [];
 let model: string | null = null;
 let models: string[] = [];
 /** What the server answers with when a session has not picked. */
@@ -494,14 +485,22 @@ let browsing: string | null = null;
 const short = (p: string) => p.replace(/^\/home\/[^/]+/, "~");
 
 function paintBar() {
+  // "Nowhere to write" was never true and is now plainly false: a session
+  // without a chosen directory writes in its OWN, which is a place, and the
+  // chip should name it rather than describe an absence. plans/45.
+  const extra = grants.length ? ` +${grants.length}` : "";
   workdirBtn.querySelector(".barlabel")!.textContent =
-    workdir ? short(workdir).split("/").pop() || short(workdir) : "No working directory";
-  workdirBtn.title = workdir
-    ? `Writing in ${workdir} — click to change`
-    : "The agent can read your files but write nowhere outside this session";
-  workdirBtn.classList.toggle("on", Boolean(workdir));
+    (workdir ? short(workdir).split("/").pop() || short(workdir) : "This session") + extra;
+  const allowed = grants.length
+    ? `\nAlso allowed: ${grants.map(short).join(", ")}.`
+    : "";
+  workdirBtn.title = (!workdir
+    ? "Working in this session's own workspace. It can read your files, and it "
+      + "will ask before writing anywhere else. Click to point it at a project."
+    : `Working in ${workdir} — click to change`) + allowed;
+  workdirBtn.classList.toggle("on", Boolean(workdir) || grants.length > 0);
   modelBtn.querySelector(".barlabel")!.textContent =
-    (model ?? "").split("/").pop()?.replace(/^claude-/, "") || "model";
+    (model ?? "").split(":").pop()?.split("/").pop()?.replace(/^claude-/, "") || "model";
   modelBtn.title = model ? `Answering with ${model}` : "Choose a model";
 }
 
@@ -513,8 +512,31 @@ function closeMenus() {
   modelBtn.setAttribute("aria-expanded", "false");
 }
 
+/**
+ * Chosen before the session exists. plans/42.
+ *
+ * A session is created by the first QUESTION, so on a new one there is no id
+ * to POST settings to — and `saveSettings` used to return silently, so the
+ * picker opened, browsed, accepted a click on "Work here" and did nothing at
+ * all. No error, no change, no way to tell.
+ *
+ * The choice is held here instead and applied the moment the session comes
+ * into existence, which keeps "a session exists because you asked something"
+ * true rather than littering the list with empty ones.
+ */
+let pendingSettings: { workdir?: string | null; model?: string | null } = {};
+
 async function saveSettings(patch: { workdir?: string | null; model?: string | null }) {
-  if (!sessionId) return;
+  if (!sessionId) {
+    pendingSettings = { ...pendingSettings, ...patch };
+    // Shown as chosen straight away: the reader picked it, and it WILL be the
+    // session's workspace. Nothing else can intervene between here and the
+    // first turn.
+    if (patch.workdir !== undefined) workdir = patch.workdir;
+    if (patch.model !== undefined) model = patch.model ?? defaultModel;
+    paintBar();
+    return;
+  }
   const r = await fetch(`/sessions/${sessionId}/settings`, {
     method: "POST", body: JSON.stringify(patch),
   });
@@ -522,7 +544,199 @@ async function saveSettings(patch: { workdir?: string | null; model?: string | n
   if (out.error) { status(out.error, "bad"); return; }
   workdir = out.workdir ?? null;
   model = out.model ?? defaultModel;
+  // A move the reader just made is drawn where they are looking, not on the
+  // next reload — the pages above it were written somewhere else, and that
+  // stops being true the moment they pick.
+  const fresh = (out.moves ?? []).slice((moves ?? []).length);
+  moves = out.moves ?? [];
+  for (const mv of fresh) flowHost.append(moveLine(mv));
   paintBar();
+}
+
+/**
+ * The reader allows a directory the agent asked for. plans/45.
+ *
+ * Straight to the controller, exactly like the workspace picker: the agent
+ * wrote the request and has no part in the answer. Then the turn — because a
+ * grant is only ever asked for in order to get on with something, and making
+ * the reader type "ok now do it" after they have already said yes is asking
+ * twice.
+ */
+async function allowDirectory(path: string) {
+  if (!sessionId || composer.busy) return;
+  const r = await fetch(`/sessions/${sessionId}/grant`, {
+    method: "POST", body: JSON.stringify({ path }),
+  });
+  const out = await r.json() as { grants?: string[]; error?: string };
+  if (out.error) { status(out.error, "bad"); return; }
+  grants = out.grants ?? grants;
+  paintBar();
+  repaintControls();
+  void composer.send(`I've allowed you to write in ${path}. Go ahead.`);
+}
+
+/**
+ * The line the flow draws where the work moved. plans/47.
+ *
+ * This is what replaced the lock. A section is a record of work done in a
+ * place, and the danger was never that the place changes — it is that it
+ * changes SILENTLY, leaving two sections about two different `x.ts` looking
+ * identical. Said out loud, in the scroll, at the point it happened, the
+ * record is true again and the reader keeps their freedom to move.
+ */
+function moveLine(mv: NonNullable<SessionIndex["moves"]>[number]): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "moveline";
+  const text = document.createElement("span");
+  text.textContent = mv.revoked
+    ? `Write access to ${short(mv.revoked)} withdrawn from here`
+    : mv.to
+      ? `Working in ${short(mv.to)} from here`
+      : "Working in this session's own workspace from here";
+  el.append(text);
+  if (mv.from) el.title = `Was ${short(mv.from)}`;
+  return el;
+}
+
+/* ------------------------------------------------------- background jobs */
+
+/**
+ * The jobs bar. plans/50. A background job is a process running on the
+ * reader's machine after the turn that started it has ended — invisible, it
+ * is exactly the thing this product promises never to have. So while any
+ * run, they sit above the composer: command, elapsed time, a pin, and a ✕.
+ *
+ * The pin is the reader's alone. Unpinned jobs die at their time limit — the
+ * safe default; pinning one says "until I stop it", and only this chrome can
+ * say that. The agent's own stop channel is a file in the workspace; these
+ * controls never pass through it.
+ */
+const jobsBar = $("jobsbar");
+let jobsTimer: number | undefined;
+
+function watchJobs() {
+  clearInterval(jobsTimer);
+  jobsTimer = setInterval(() => void paintJobs(), 3000) as unknown as number;
+  void paintJobs();
+}
+
+async function paintJobs() {
+  if (!sessionId) { jobsBar.hidden = true; return; }
+  const r = await fetch(`/sessions/${sessionId}/jobs`).catch(() => null);
+  if (!r?.ok) { jobsBar.hidden = true; return; }
+  const { jobs } = await r.json() as { jobs: {
+    id: string; command: string; startedAt: number; pinned: boolean; done: boolean;
+  }[] };
+  const running = jobs.filter((j) => !j.done);
+  jobsBar.hidden = !running.length;
+  if (!running.length) return;
+
+  jobsBar.replaceChildren(...running.map((j) => {
+    const row = document.createElement("div");
+    row.className = "jobrow";
+    const cmd = document.createElement("span");
+    cmd.className = "jobcmd";
+    cmd.textContent = j.command.split("\n")[0]!.slice(0, 60);
+    cmd.title = j.command;
+    const age = document.createElement("span");
+    age.className = "jobage";
+    const mins = Math.floor((Date.now() - j.startedAt) / 60_000);
+    age.textContent = mins < 1 ? "just started" : `${mins}m`;
+
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.className = "jobpin" + (j.pinned ? " on" : "");
+    pin.textContent = j.pinned ? "pinned" : "pin";
+    pin.title = j.pinned
+      ? "Running until you stop it — click to put the time limit back"
+      : "Keep running until you stop it, ignoring the time limit";
+    pin.addEventListener("click", () => void jobAction(j.id, j.pinned ? "unpin" : "pin"));
+
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "jobstop";
+    stop.textContent = "✕";
+    stop.title = "Stop this job";
+    stop.setAttribute("aria-label", `Stop: ${cmd.textContent}`);
+    stop.addEventListener("click", () => void jobAction(j.id, "stop"));
+
+    row.append(cmd, age, pin, stop);
+    return row;
+  }));
+}
+
+async function jobAction(job: string, action: "stop" | "pin" | "unpin") {
+  if (!sessionId) return;
+  const r = await fetch(`/sessions/${sessionId}/jobs`, {
+    method: "POST", body: JSON.stringify({ job, action }),
+  });
+  const out = await r.json() as { error?: string };
+  if (out.error) status(out.error, "bad");
+  void paintJobs();
+}
+
+/** Apply what was chosen before the session existed. Called once, after it does. */
+async function flushPendingSettings() {
+  const patch = pendingSettings;
+  pendingSettings = {};
+  if (!sessionId || (patch.workdir === undefined && patch.model === undefined)) return;
+  await saveSettings(patch);
+}
+
+/**
+ * Where this session writes, at the top of the picker — one concept, one
+ * place. plans/49. The chip says "+1"; this is where you see what the +1 is
+ * and take it back. Revoking is one click, no dialog: it narrows the agent,
+ * costs nothing that cannot be re-granted with a tap on the page, and the
+ * flow records where the access ended.
+ */
+function paintWrites() {
+  const box = picker.querySelector(".pickwrites")!;
+  box.replaceChildren();
+
+  const home = document.createElement("div");
+  home.className = "wline";
+  const homeLabel = document.createElement("span");
+  homeLabel.className = "wpath";
+  homeLabel.textContent = workdir ? short(workdir) : "This session's own workspace";
+  home.append(homeLabel);
+  box.append(home);
+
+  for (const g of grants) {
+    const line = document.createElement("div");
+    line.className = "wline";
+    const label = document.createElement("span");
+    label.className = "wpath";
+    label.textContent = short(g);
+    const off = document.createElement("button");
+    off.type = "button";
+    off.className = "woff";
+    off.textContent = "✕";
+    off.title = `Withdraw write access to ${short(g)} — the agent can ask again`;
+    off.setAttribute("aria-label", off.title);
+    off.addEventListener("click", () => void revokeGrant(g));
+    line.append(label, off);
+    box.append(line);
+  }
+}
+
+async function revokeGrant(path: string) {
+  if (!sessionId || composer.busy) return;
+  const r = await fetch(`/sessions/${sessionId}/grant`, {
+    method: "POST", body: JSON.stringify({ path, revoke: true }),
+  });
+  const out = await r.json() as { grants?: string[]; moves?: SessionIndex["moves"]; error?: string };
+  if (out.error) { status(out.error, "bad"); return; }
+  grants = out.grants ?? [];
+  // Drawn where it happened, like a move — and the grant block on the page
+  // reverts to an answerable request, so taking access back never strands
+  // the work: one tap re-asks, one tap re-allows.
+  const fresh = (out.moves ?? []).slice((moves ?? []).length);
+  moves = out.moves ?? moves;
+  for (const mv of fresh) flowHost.append(moveLine(mv));
+  paintBar();
+  repaintControls();
+  paintWrites();
 }
 
 async function browse(path?: string) {
@@ -556,9 +770,14 @@ workdirBtn.addEventListener("click", () => {
   const wasOpen = !picker.hidden;
   closeMenus();
   if (wasOpen) return;
-  if (!sessionId) { status("Ask something first — a folder belongs to a session", "bad"); return; }
+  // No session yet is FINE. Choosing where to work before asking is the
+  // normal order — you decide what you are working on, then you ask about it.
+  // This used to refuse outright ("Ask something first"), which made the one
+  // moment the choice matters most the one moment it was impossible. The
+  // choice is held and applied when the session is created. plans/42.
   picker.hidden = false;
   workdirBtn.setAttribute("aria-expanded", "true");
+  paintWrites();
   void browse(workdir ?? undefined);
 });
 
@@ -574,27 +793,97 @@ picker.querySelector(".pickclear")!.addEventListener("click", () => {
   closeMenus();
 });
 
+/**
+ * The model menu, grown up. plans/48.
+ *
+ * It was a flat list of the boot provider's three ids. It is now every
+ * provider the controller knows: the keyed ones expand into their models,
+ * the keyless ones show a password field, and pasting a key is the whole
+ * setup — no .env, no restart. A model from another provider travels as
+ * `provider:model`, and the session records it like any other.
+ */
+interface ProviderInfo {
+  id: string; title: string; keyEnv: string; hasKey: boolean;
+  source: "env" | "stored" | null; models: string[]; prefix?: string;
+}
+
+function pickModel(id: string) {
+  if (!sessionId) { model = id; paintBar(); closeMenus(); return; }
+  void saveSettings({ model: id });
+  closeMenus();
+}
+
+/** Which provider group is expanded. One at a time; the menu is a menu. */
+let openProvider: string | null = null;
+
+async function paintModelMenu() {
+  const { providers } = await (await fetch("/providers")).json() as
+    { providers: ProviderInfo[] };
+  modelMenu.replaceChildren();
+
+  // ONLY the providers with a key, and ONLY their models. There used to be a
+  // curated list of the boot provider's ids painted first — which meant a
+  // Fireworks-only setup opened its menu onto three Anthropic names it could
+  // not answer with. The menu now shows exactly what this machine can run:
+  // nothing here is ever a model you cannot actually pick.
+  const keyed = providers.filter((prov) => prov.hasKey);
+
+  // One configured provider is the common case, and a menu of one collapsed
+  // group is a menu with an extra click in it — its models show directly.
+  const only = keyed.length === 1 ? keyed[0]!.id : null;
+
+  for (const prov of keyed) {
+    const expanded = openProvider === prov.id || prov.id === only;
+    if (!only) {
+      const head = document.createElement("button");
+      head.type = "button";
+      head.className = "provrow" + (expanded ? " open" : "");
+      const name = document.createElement("span");
+      name.textContent = prov.title;
+      head.append(name);
+      head.addEventListener("click", () => {
+        openProvider = openProvider === prov.id ? null : prov.id;
+        void paintModelMenu();
+      });
+      modelMenu.append(head);
+    }
+    if (!expanded) continue;
+
+    const box = document.createElement("div");
+    box.className = "provmodels";
+    for (const mid of prov.models) {
+      const short = prov.prefix && mid.startsWith(prov.prefix)
+        ? mid.slice(prov.prefix.length) : mid;
+      const qualified = `${prov.id}:${short}`;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = only ? "pickrow" : "pickrow sub";
+      row.textContent = short;
+      // Both spellings of "this one": the qualified id a pick records, and
+      // the bare id an older session or the boot default may carry.
+      if (qualified === model || mid === model || short === model) row.classList.add("on");
+      row.addEventListener("click", () => pickModel(qualified));
+      box.append(row);
+    }
+    modelMenu.append(box);
+  }
+  if (!keyed.length) {
+    const hint = document.createElement("div");
+    hint.className = "provstate";
+    hint.style.padding = "8px 12px";
+    hint.textContent = "No providers configured — add a key in settings.";
+    modelMenu.append(hint);
+  }
+
+  modelMenu.hidden = false;
+  modelBtn.setAttribute("aria-expanded", "true");
+}
+
 modelBtn.addEventListener("click", () => {
   const wasOpen = !modelMenu.hidden;
   closeMenus();
   if (wasOpen) return;
-  modelMenu.replaceChildren();
-  for (const id of models) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "pickrow";
-    row.textContent = id.replace(/^claude-/, "");
-    if (id === model) row.classList.add("on");
-    row.addEventListener("click", () => {
-      // No session yet: remember it, and the next one starts with it.
-      if (!sessionId) { model = id; paintBar(); closeMenus(); return; }
-      void saveSettings({ model: id });
-      closeMenus();
-    });
-    modelMenu.append(row);
-  }
-  modelMenu.hidden = false;
-  modelBtn.setAttribute("aria-expanded", "true");
+  void paintModelMenu();
 });
 
 document.addEventListener("click", (e) => {
@@ -606,23 +895,6 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeMenus();
 });
-
-/**
- * Which workspace the one composer is aimed at.
- *
- * Null means the site. The reader can drop it with the chip's ×, and closing
- * the workspace drops it too — a context pointing at something that is no
- * longer on screen is worse than none.
- */
-let context: string | null = null;
-
-function setContext(app: string | null) {
-  context = app;
-  const view = app ? panel.get(app) : undefined;
-  composer.context(view ? view.title : null);
-}
-
-composer.onUncontext = () => setContext(null);
 
 /**
  * Closing is the reader's, and closing means GONE: the directory goes with it.
@@ -656,12 +928,13 @@ let atSiteEnd = false;
  * All of that is now a class on one element.
  */
 function placeComposer() {
-  // Read from the scroller only — never from the composer's own height, which
-  // changes as a result of this decision and would oscillate.
+  // Still read, because the ANCHOR depends on it: a question asked mid-scroll
+  // is about the block you are looking at, and one asked at the end is about
+  // the site. What no longer depends on it is how the composer LOOKS —
+  // plans/41: one floating pill, one size, its border always visible, so the
+  // place you type does not move or change shape as you scroll past it.
   atSiteEnd = flow.atEnd;
-
   flowHost.classList.toggle("atend", atSiteEnd);
-  composer.compact(!atSiteEnd && !aim);
   if (!aim) {
     composer.placeholder(atSiteEnd
       ? "Ask a follow-up, or something new…"
@@ -822,7 +1095,8 @@ function currentAnchor(): Anchor | undefined {
     const doc = section.querySelector<HTMLElement>(".doc");
     const page = section.dataset.page;
     if (!doc || !page) continue;
-    for (const [i, node] of [...doc.children].entries()) {
+    // `.ghost` is speech still forming — not a block, so not a candidate.
+    for (const [i, node] of [...doc.children].filter((n) => !n.classList.contains("ghost")).entries()) {
       const r = node.getBoundingClientRect();
       const gap = Math.abs((r.top + r.bottom) / 2 - mid);
       if (gap < bestGap) { bestGap = gap; best = i; bestPage = page; }
@@ -869,15 +1143,22 @@ async function newSession(opts: { focus?: boolean } = {}) {
   sessionId = null;
   attempted = false;
   pages = [];
+  clearPaintQueue();
   flow.clear();
   pendingTurn = null;
   location.hash = "";
   side.setActive(null);
-  side.setSections([]);
   panel.clear();
   flowHost.replaceChildren(emptyState());
   appEl.dataset.empty = "1";
-  composer.compact(false);
+
+  pendingSettings = {};
+  workdir = null;
+  grants = [];
+  moves = [];
+  clearInterval(jobsTimer);
+  jobsBar.hidden = true;
+  paintBar();
   composer.placeholder("Ask anything…");
   composer.clear();
   status("");
@@ -929,6 +1210,7 @@ const CUT_SHORT: Record<string, string> = {
   time: "ran out of time",
   context: "ran out of room to think",
   error: "hit an error",
+  stuck: "kept failing the same way and was stopped",
 };
 
 /**
@@ -971,10 +1253,22 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   flow.clear();
   flowHost.replaceChildren();          // the empty state, if it was up
   pages = [];
-  if (!opts.starting) pendingTurn = null;
+
+  // THE QUESTION SURVIVES THE CLEAR. On a first message the ask bubble is
+  // drawn before the session exists — and this call is what brings the session
+  // into being, so both clears above land on a flow the caller has just,
+  // deliberately, put something into. Detaching it left the reader with no
+  // evidence their question had gone anywhere: it reappeared only when the
+  // agent's first block arrived and `flow.add` re-attached its section by
+  // accident. Keeping the variable without keeping the node was half a fix.
+  if (opts.starting && pendingTurn) {
+    flowHost.append(pendingTurn);
+    flow.toTopOf(pendingTurn, { animate: false });
+  } else pendingTurn = null;
 
   const [index, site, apps] = await Promise.all([
-    fetch(`/sessions/${id}`).then((r) => r.json()) as Promise<SessionIndex>,
+    fetch(`/sessions/${id}`).then((r) => r.json()) as
+      Promise<SessionIndex & { lastTurn?: { stopped: string; ask: string; error?: string } }>,
     fetch(`/sessions/${id}/site`).then((r) => r.json()) as Promise<Site>,
     fetch(`/sessions/${id}/apps`).then((r) => r.json()) as Promise<{ apps: AppView[] }>,
   ]);
@@ -983,14 +1277,34 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
   // Both are properties of the conversation, not of the process: a session
   // resumed tomorrow writes where it wrote today and answers with the same model.
   workdir = index.workdir ?? null;
+  grants = index.grants ?? [];
+  moves = index.moves ?? [];
   model = index.model ?? defaultModel;
   paintBar();
-  // A workspace belongs to its session, so it comes back with it — and never
-  // travels to another one.
-  panel.setAll(apps.apps ?? []);
   answered = index.answered ?? {};
   chosen = index.chosen ?? {};
-  for (const p of site.pages) addPage(p);
+  // The moves are drawn between the pages they came between, so a section
+  // written in one directory and a section written in another are told apart
+  // by a line that says so. plans/47.
+  site.pages.forEach((p, i) => {
+    for (const mv of moves ?? []) if (mv.after === i) flowHost.append(moveLine(mv));
+    addPage(p);
+  });
+  // A workspace belongs to its session, so it comes back with it — and never
+  // travels to another one. AFTER the pages: cards parent into the last turn,
+  // which has to exist before anything can land in it.
+  panel.setAll(apps.apps ?? []);
+  watchJobs();
+
+  // RESUME, offered rather than automatic. plans/48. A session reopened after
+  // a crash or a cut-off used to present its half-written page as if it were
+  // finished — the interruption was only ever marked while you watched it
+  // happen. The transcript knows better, so say so, with the same one-action
+  // mark the live path uses. Not for "aborted": stopping was a choice, and a
+  // choice does not need repairing.
+  const bad = index.lastTurn && index.lastTurn.stopped !== "done"
+    && index.lastTurn.stopped !== "aborted";
+  if (bad && pages.length) markUnfinished(index.lastTurn!.stopped);
 
   // Always open at the foot of the site — a session is resumed at its newest
   // answer, and the reader scrolls back for the rest. Instantly, not smoothly:
@@ -1007,7 +1321,6 @@ async function openSession(id: string, opts: { starting?: boolean } = {}) {
       placeComposer();
     });
   }
-  paintSide();
   placeComposer();
   // An empty session has nothing to read, so open the composer rather than
   // making a first-time reader hunt for it.
@@ -1037,44 +1350,476 @@ async function startSession(): Promise<string> {
  * Instant, never smooth: a glide per block would still be running when the
  * next one arrived.
  */
+/**
+ * Change the page, and keep up with it if the reader was at the foot.
+ *
+ * It used to call `flow.toEnd({animate:false})` — an instant jump, per block,
+ * with blocks arriving in clumps of five. `keepUp` hands the decision to the
+ * one rAF loop that owns the scroll, so a clump of five is one smooth
+ * movement rather than five jumps. plans/43.
+ */
 function stickToEnd(change: () => void) {
   const wasAtEnd = flow.atEnd;
   change();
   if (!wasAtEnd) return;
-  flow.toEnd({ animate: false });
+  flow.keepUp();
   placeComposer();
 }
 
 /* ------------------------------------------------------------------- turn */
+
+/**
+ * The forming block — speech being typed. plans/40.
+ *
+ * ONE ghost paragraph, at the end of whichever section the agent is speaking
+ * into. `forming` events grow it; any real page event clears it first,
+ * because the block the ghost previewed is about to land exactly where the
+ * ghost stood. It lives INSIDE `.doc` so it sits on the page's measure, and
+ * carries the `ghost` class so everything that zips `doc.children` against
+ * `page.blocks` knows to skip it.
+ */
+let ghost: HTMLElement | null = null;
+
+/**
+ * The paint queue: arrival is not painting. plans/43.
+ *
+ * The controller polls the session directory every 120ms and emits everything
+ * it found, so one `cat >> page.ndjson` heredoc of five lines arrives as five
+ * `page_block` events in a single microtask — five nodes appended in one
+ * frame, five entry animations starting on the same tick. It reads as a clump
+ * landing rather than a page assembling, and it is why the shell path always
+ * felt lumpier than the streamed one.
+ *
+ * So blocks queue and drain ONE PER FRAME. Nothing about the data changes;
+ * only the pacing of the DOM writes. A block that arrives alone is painted on
+ * the next frame — imperceptible — and a clump of five becomes a cascade.
+ *
+ * The queue is per-document and drained in order, so a page never assembles
+ * out of sequence.
+ */
+interface Queued { doc: HTMLElement; block: Block; page: string }
+const paintQueue: Queued[] = [];
+let painting: number | undefined;
+
+function queueBlock(doc: HTMLElement, block: Block, page: string) {
+  paintQueue.push({ doc, block, page });
+  if (painting !== undefined) return;
+  const drain = () => {
+    const next = paintQueue.shift();
+    if (!next) { painting = undefined; return; }
+    // A document removed while its blocks were in flight — a page replaced or
+    // a session switched — drops its queued work rather than resurrecting it.
+    if (next.doc.isConnected) {
+      stickToEnd(() => appendBlock(next.doc, next.block, actionsFor(next.page)));
+    }
+    painting = requestAnimationFrame(drain);
+  };
+  painting = requestAnimationFrame(drain);
+}
+
+/** A session change throws away whatever was still waiting to be painted. */
+function clearPaintQueue() {
+  paintQueue.length = 0;
+  if (painting !== undefined) cancelAnimationFrame(painting);
+  painting = undefined;
+}
+
+/**
+ * What the agent is doing — and, if you ask, how. plans/41, plans/44.
+ *
+ * One quiet line beside the answer being written. Five words rotate through
+ * it and nothing else is shown BY DEFAULT: someone reading about margins did
+ * not come here to watch `sed -n` go past.
+ *
+ * But the work is now KEPT rather than discarded, behind a disclosure that is
+ * closed until you open it. Two things made that worth building. A turn's
+ * failure already had exactly this treatment — the command was the only thing
+ * that explained it — and there was no reason the same evidence should be
+ * unavailable when a turn merely went oddly rather than wrongly. And reading a
+ * session back afterwards showed the agent spending a third of its steps
+ * re-validating JSON it had already written, which is the kind of thing you
+ * can only notice if you can see it.
+ *
+ * THREE RULES it obeys:
+ *
+ *   1. IT TRAILS THE CONTENT. It used to be appended when the first tool
+ *      started — before the first `page_open` — so it landed between the
+ *      question and the answer and stayed there while blocks streamed in
+ *      underneath it. It is re-appended after every page event now, and
+ *      appending a node that is already in the document MOVES it.
+ *   2. IT IS STICKY WHILE RUNNING. Trailing the content is not enough on an
+ *      answer longer than a screen: the notice would trail it right off the
+ *      bottom. Pinned to the viewport it stays visible however far the reader
+ *      has scrolled, and it becomes the one signal that something is still
+ *      happening below.
+ *   3. IT SURVIVES THE TURN. Collapsed, in the flow, as that turn's record of
+ *      how its answer was made.
+ */
+let notice: HTMLElement | null = null;
+let noticeLog: HTMLElement | null = null;
+let noticeSteps = 0;
+
+/** At most this many steps kept per turn — a turn is capped at 22 anyway. */
+const MAX_LOG_STEPS = 25;
+/** And this much output per step: a tail is evidence, a log is a terminal. */
+const MAX_LOG_TAIL = 2000;
+
+/** Does the reader want to watch the machine? Remembered, like the theme. */
+function wantsWork(): boolean {
+  try {
+    return JSON.parse(localStorage.getItem("perpetual.settings") ?? "{}").work === true;
+  } catch { return false; }
+}
+function rememberWork(on: boolean) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("perpetual.settings") ?? "{}");
+    localStorage.setItem("perpetual.settings", JSON.stringify({ ...raw, work: on }));
+  } catch { /* a private window must not break the disclosure */ }
+}
+
+/**
+ * Where the notice hangs: the turn IN FLIGHT.
+ *
+ * It used to be `flowHost.querySelector(".panel:last-child")`, which returns
+ * the first match in DOCUMENT ORDER — the last panel of the FIRST turn. So on
+ * any session with more than one turn the notice appeared near the top of the
+ * scroll, above the question that had just been asked.
+ */
+function noticeHost(): HTMLElement | null {
+  return pendingTurn
+    ?? flowHost.querySelector<HTMLElement>(".turn:last-child")
+    ?? flowHost;
+}
+
+function makeNotice(): HTMLElement {
+  const n = document.createElement("div");
+  n.className = "doing running";
+  const dot = document.createElement("span");
+  dot.className = "ddot";
+  const label = document.createElement("span");
+  label.className = "dlabel";
+
+  // The disclosure. Always here, closed unless the reader has said otherwise.
+  const d = document.createElement("details");
+  d.className = "dwhy";
+  if (wantsWork()) d.open = true;
+  const sum = document.createElement("summary");
+  sum.textContent = "show work";
+  const log = document.createElement("div");
+  log.className = "dlog";
+  d.append(sum, log);
+  d.addEventListener("toggle", () => rememberWork(d.open));
+
+  // The way back to the stream, when it has run on past the reader.
+  const jump = document.createElement("button");
+  jump.type = "button";
+  jump.className = "djump";
+  jump.hidden = true;
+  jump.addEventListener("click", () => flow.toEnd());
+
+  n.append(dot, label, jump, d);
+  noticeLog = log;
+  noticeSteps = 0;
+  return n;
+}
+
+function showDoing(word: string) {
+  if (!notice) {
+    notice = makeNotice();
+    unseen = 0;
+    /*
+     * WHILE RUNNING IT LIVES IN THE COMPOSER'S OWN FURNITURE. plans/44.
+     *
+     * It was `position: sticky` in the scroll, offset by a guess at the
+     * composer's height — and the guess was 27px short, so the notice's lower
+     * third (the `show work` line) sat behind the pill. Measuring the composer
+     * instead of guessing did not fix it: the number came out a layout too
+     * early every time, and no amount of re-measuring got two elements to
+     * agree about where the floor was.
+     *
+     * So it stops being a second element. `.floathost` is already anchored to
+     * the viewport, already painted above the page, and already stacks what is
+     * in it — putting the notice there, above the pill, makes clearing the
+     * composer a fact of layout rather than a number that can drift.
+     */
+    floatHost.insertBefore(notice, composer.root);
+  }
+  notice.querySelector(".dlabel")!.textContent = word;
+  notice.classList.remove("bad");
+}
+
+/**
+ * Keep the notice at the end of what has been written.
+ *
+ * Appending a node that is already in the document moves it, so this is the
+ * whole of rule 1 — called after every page event, it hops the notice past
+ * whatever just landed.
+ */
+function trailNotice() {
+  if (!notice) return;
+  // While a turn runs the notice lives in the composer's furniture, where it
+  // is always visible and always clears the pill. Trailing is for the SETTLED
+  // one, which belongs in the flow beside the answer it describes — moving a
+  // running one back into the scroll would undo the whole point.
+  if (notice.classList.contains("running")) return;
+  const host = noticeHost();
+  if (host && notice.parentElement !== host) host.append(notice);
+  else if (host && host.lastElementChild !== notice) host.append(notice);
+}
+
+/** One step, as it starts. The log grows; the label says the word. */
+function logStep(word: string, command: string) {
+  showDoing(word);
+  if (!noticeLog) return;
+  if (noticeSteps >= MAX_LOG_STEPS) return;
+  noticeSteps++;
+  const row = document.createElement("div");
+  row.className = "dstep";
+  const n = document.createElement("span");
+  n.className = "dn";
+  n.textContent = String(noticeSteps).padStart(2, "0");
+  const verb = document.createElement("span");
+  verb.className = "dverb";
+  verb.textContent = word;
+  const cmd = document.createElement("code");
+  cmd.className = "dcmd";
+  cmd.textContent = command.split("\n")[0]!.slice(0, 300);
+  row.append(n, verb, cmd);
+  noticeLog.append(row);
+}
+
+/** And how it ended. Output is attached only when there is a reason to read it. */
+function logResult(ok: boolean, ms: number, output: string) {
+  const row = noticeLog?.lastElementChild as HTMLElement | undefined;
+  if (!row || !row.classList.contains("dstep")) return;
+  row.classList.toggle("bad", !ok);
+  const mark = document.createElement("span");
+  mark.className = "dmark";
+  mark.textContent = `${(ms / 1000).toFixed(1)}s ${ok ? "✓" : "✗"}`;
+  row.append(mark);
+  if (!ok && output.trim()) {
+    const pre = document.createElement("pre");
+    pre.className = "dout";
+    pre.textContent = output.split("\n").slice(-8).join("\n").slice(-MAX_LOG_TAIL);
+    row.append(pre);
+  }
+}
+
+/**
+ * A command failed. The log opens itself — this is the one moment the command
+ * stops being noise and starts being the answer.
+ */
+function noticeFailed() {
+  if (!notice) showDoing("Running");
+  notice!.classList.add("bad");
+  notice!.querySelector(".dlabel")!.textContent = "That step failed";
+  const d = notice!.querySelector<HTMLDetailsElement>(".dwhy");
+  if (d) d.open = true;
+}
+
+/**
+ * The turn ended. The notice stops being live and becomes the record of it:
+ * un-sticks, stops pulsing, and keeps the log for anyone who wants to know
+ * how this answer was made.
+ */
+function settleNotice(word: string) {
+  if (!notice) return;
+  notice.classList.remove("running");
+  // Out of the chrome and into the scroll: a live status belongs where the
+  // reader is looking, a record belongs beside the answer it describes.
+  noticeHost()?.append(notice);
+  notice.querySelector<HTMLElement>(".djump")!.hidden = true;
+  if (!notice.classList.contains("bad")) {
+    notice.querySelector(".dlabel")!.textContent = word;
+  }
+  // Nothing to show and nothing went wrong: it was a turn with no commands at
+  // all — streamed straight out — so there is no work to keep.
+  if (noticeSteps === 0 && !notice.classList.contains("bad")) clearNotice();
+  notice = null;
+  noticeLog = null;
+}
+
+/**
+ * Rule 3: say when the answer has run on past the reader. plans/44.
+ *
+ * The page deliberately does NOT chase the stream — an answer here is a
+ * composed document whose opening is the part you most need to read, so
+ * following it the way a chat does would slide the lead out from under you.
+ * The cost of not following is that a long answer grows out of sight and
+ * nothing says so.
+ *
+ * So: count what has landed below the fold, and offer the way to it. Costs
+ * nothing when the answer fits on screen, which is most of them.
+ */
+let unseen = 0;
+
+function noticeArrival() {
+  if (!notice) return;
+  const jump = notice.querySelector<HTMLElement>(".djump");
+  if (!jump) return;
+  if (flow.atEnd) { unseen = 0; jump.hidden = true; return; }
+  unseen++;
+  jump.textContent = `↓ ${unseen} new`;
+  jump.hidden = false;
+}
+
+function clearNotice() {
+  notice?.remove();
+  notice = null;
+  noticeLog = null;
+  noticeSteps = 0;
+}
+
+function clearGhost() {
+  ghost?.remove();
+  ghost = null;
+}
+
+/**
+ * Turn the ghost INTO the block it was previewing. plans/43.
+ *
+ * The flash this removes: a paragraph typed itself out as a ghost, the line
+ * completed, `clearGhost()` deleted the visible text, and `appendBlock()` put
+ * an identical paragraph back — from `opacity: 0`, sliding 7px. Text the
+ * reader had already read vanished and faded in again, on every block.
+ *
+ * When the arriving block is the prose the ghost was already showing, the node
+ * stays: drop the class, drop the caret, and it simply becomes real. No
+ * removal, no insertion, no entry animation, and — because nothing left the
+ * document — no height change for the scroll loop to chase.
+ *
+ * Returns true when it took the block; false means render it normally.
+ */
+function promoteGhost(page: string, index: number, block: Block, doc: HTMLElement): boolean {
+  if (!ghost || ghost.parentElement !== doc) return false;
+  // A skeleton held a SHAPE open, not words — there is nothing in it to
+  // promote, so it is removed and the real block rendered normally. It did its
+  // job by reserving the space the block is about to occupy.
+  if (ghost.dataset.shape) return false;
+  // Only prose, and only the LAST slot: the ghost sits at the end of the doc,
+  // so a block landing anywhere else is not the one it was previewing.
+  if (block.kind !== "prose" || index !== doc.children.length - 1) return false;
+  // The ghost shows raw text; the block renders inline marks. Compare with the
+  // marks stripped, so `**piston**` and `piston` are recognised as the same
+  // sentence rather than as a mismatch that flashes anyway.
+  const bare = (t: string) => t.replace(/\*\*|[`*]/g, "").trim();
+  if (bare(ghost.textContent ?? "") !== bare(block.text)) return false;
+
+  const real = renderBlock(block, actionsFor(page));
+  // Move the rendered children in rather than replacing the node: the element
+  // the reader is looking at is the element that stays.
+  ghost.replaceChildren(...real.childNodes);
+  ghost.className = real.className;
+  for (const { name, value } of [...real.attributes]) {
+    if (name !== "class") ghost.setAttribute(name, value);
+  }
+  ghost = null;
+  return true;
+}
+
+/**
+ * Blocks whose ghost is a SHAPE rather than words. plans/43.
+ *
+ * Prose types itself out because its content is meaningful as it arrives.
+ * A chart's is not — half a chart is a false shape, and no honest preview of
+ * it exists. What can be previewed is its FOOTPRINT: something chart-shaped,
+ * roughly the right height, so the finished block drops into a space that is
+ * already there instead of shoving the page down when it lands.
+ *
+ * The heights are approximations of the real blocks' and they do not need to
+ * be exact — reserving most of the space removes most of the shift.
+ */
+const SKELETON: Record<string, { rows: number; tall?: boolean }> = {
+  chart: { rows: 1, tall: true },
+  figure: { rows: 1, tall: true },
+  table: { rows: 4 },
+  metrics: { rows: 1 },
+  stat: { rows: 1 },
+  card: { rows: 2 },
+  split: { rows: 2 },
+  flow: { rows: 1 },
+  list: { rows: 3 },
+  code: { rows: 3 },
+  next: { rows: 3 },
+};
+
+function showForming(pageId: string, text: string | null, kind: string | null) {
+  const doc = docFor(pageId);
+  if (!doc) return;
+  const shape = kind ? SKELETON[kind] : undefined;
+
+  if (!ghost || ghost.parentElement !== doc) {
+    clearGhost();
+    ghost = document.createElement(shape ? "div" : "p");
+    ghost.className = "ghost";
+    doc.append(ghost);
+  }
+
+  stickToEnd(() => {
+    // A block with prose types it. One without gets its shape held open.
+    if (text !== null && !shape) {
+      ghost!.className = "ghost";
+      ghost!.textContent = text;
+      return;
+    }
+    if (!shape) return;
+    if (ghost!.dataset.shape === kind) return;      // already standing
+    ghost!.dataset.shape = kind!;
+    ghost!.className = `ghost skel${shape.tall ? " tall" : ""}`;
+    ghost!.replaceChildren(...Array.from({ length: shape.rows }, () => {
+      const bar = document.createElement("span");
+      bar.className = "skelbar";
+      return bar;
+    }));
+  });
+}
 
 function handle(ev: WireEvent) {
   // Anything that changes what a page looks like is worth re-measuring — the
   // agent is told about the page as it stands, not as it was when it opened.
   if (ev.type.startsWith("page_")) { scheduleReport(); scheduleRevisions(); }
 
+  // The ghost previews the block about to land, so any OTHER page event makes
+  // it stale and it goes — which also keeps every index below pointing at a
+  // real block. `page_block` is the exception: that is the block it was
+  // previewing, and it is promoted in place rather than removed and rebuilt.
+  if (ev.type.startsWith("page_") && ev.type !== "page_block") clearGhost();
+
+  // Rule 1: the notice trails whatever has just been written. Appending a node
+  // already in the document moves it, so this is the whole of it. plans/44.
+  if (ev.type.startsWith("page_")) { trailNotice(); noticeArrival(); }
+
   switch (ev.type) {
+    case "forming":
+      showForming(ev.page, ev.text, ev.kind);
+      break;
+
     case "text_delta":
-      // Prose between tool calls is status, never content. The user's answer
-      // is the page; this is only evidence that something is alive.
+      // The model's private prose. It used to be printed into the status line
+      // a fragment at a time, which put the machine's inner monologue in front
+      // of someone who asked a question. It is now only EVIDENCE that a turn
+      // is alive, and the word for that is "Thinking".
       think += ev.delta;
-      status(think.trim().split("\n").pop()!.slice(-90), "work");
+      if (!notice || notice.classList.contains("bad")) showDoing("Thinking");
       break;
 
     case "tool_start":
       think = "";
-      composer.activity(
-        activityLine(describeCommand(ev.command), (id) => pages.find((p) => p.id === id)?.title),
-        ev.command,
-      );
+      lastOutput = "";
+      logStep(describeCommand(ev.command), ev.command);
       break;
 
     case "tool_output":
-      composer.output(ev.chunk);
+      // Held for the step's own row, and attached to it only if it fails.
+      lastOutput = (lastOutput + ev.chunk).slice(-4000);
       break;
 
-    case "tool_end":
-      if (ev.exitCode !== 0 || ev.killed) composer.commandFailed();
+    case "tool_end": {
+      const ok = ev.exitCode === 0 && !ev.killed;
+      logResult(ok, ev.ms, lastOutput);
+      if (!ok) noticeFailed();
       break;
+    }
 
     case "page_open":
       addPage(ev.page, { goto: true });
@@ -1086,7 +1831,9 @@ function handle(ev: WireEvent) {
       const page = pages.find((p) => p.id === ev.page);
       if (!doc || !page) break;
       page.blocks[ev.index] = ev.block;
-      stickToEnd(() => appendBlock(doc, ev.block, actionsFor(ev.page)));
+      // The ghost was already showing this paragraph: keep the node it is in.
+      if (promoteGhost(ev.page, ev.index, ev.block, doc)) { flow.keepUp(); break; }
+      queueBlock(doc, ev.block, ev.page);
       break;
     }
 
@@ -1159,7 +1906,6 @@ function handle(ev: WireEvent) {
       doc.replaceChildren();
       const acts = actionsFor(ev.page.id);
       for (const b of ev.page.blocks) appendBlock(doc, b, acts);
-      paintSide();
       reaim();
       break;
     }
@@ -1172,14 +1918,12 @@ function handle(ev: WireEvent) {
       // The session takes its name from its first section, so naming that one
       // renames the session — in the sidebar, which is where its name lives now.
       if (pages[0] === p && sessionId) side.rename(sessionId, ev.title);
-      paintSide();
       break;
     }
 
     case "page_remove":
       flow.remove(ev.page);
       pages = pages.filter((p) => p.id !== ev.page);
-      paintSide();
       break;
 
     // The workspace tree, watched exactly like the site and arriving down the
@@ -1190,9 +1934,8 @@ function handle(ev: WireEvent) {
       break;
 
     case "app_view":
-      // Not focused: the agent updating a workspace the reader has tabbed away
-      // from should not drag them back to it.
-      panel.set(ev.app, { focus: false });
+      // In place: the card repaints where it stands, nothing is dragged.
+      panel.set(ev.app);
       break;
 
     case "app_close":
@@ -1217,6 +1960,10 @@ function handle(ev: WireEvent) {
       break;
 
     case "turn_end": {
+      clearGhost();
+      // The notice settles into the flow as this turn's record of how its
+      // answer was made — collapsed, unless the reader asked to watch.
+      settleNotice(ev.stopped === "done" ? "Done" : "Stopped early");
       // A page the agent was cut off in the middle of looks exactly like a
       // finished one. Marking it is what makes the failure recoverable rather
       // than silent — and the mark carries the way to finish it.
@@ -1231,23 +1978,36 @@ function handle(ev: WireEvent) {
           ? ev.usage.costUsd.toFixed(4) : ev.usage.costUsd.toFixed(2)}`;
         spent.title = `last turn · ${ev.usage.input + ev.usage.cacheRead} in, ${ev.usage.output} out`;
       }
-      const summary = `${ev.pages} page${ev.pages === 1 ? "" : "s"} · ${ev.usage.steps} step${
-        ev.usage.steps === 1 ? "" : "s"} · ${Math.round(ev.usage.ms / 100) / 10}s` +
-        (ev.usage.cacheRead ? ` · cache ${ev.usage.cacheRead}` : "");
-      // A turn that was cut off used to look exactly like one that finished.
+      /**
+       * A finished turn says NOTHING. plans/41.
+       *
+       * It used to print `3 pages · 5 steps · 35.6s · cache 60641` into the
+       * composer — the harness reporting on itself, in the place the reader
+       * types, about a question they had already got an answer to. Pages and
+       * steps and cache reads are numbers for someone tuning the agent; the
+       * reader is looking at the page it just wrote. The full accounting is in
+       * the transcript, and `pnpm report` reads it.
+       *
+       * A turn that was CUT OFF still speaks, because that is the one case the
+       * page does not tell the truth by itself: it looks finished and is not.
+       * Even then, in words, with no telemetry attached.
+       */
       if (ev.stopped === "steps") {
-        status(`stopped after ${ev.usage.steps} steps — the page may be unfinished. ${summary}`, "bad");
+        status("Stopped early — the answer may be unfinished.", "bad");
       } else if (ev.stopped === "time") {
-        status(`stopped on the time budget — the page may be unfinished. ${summary}`, "bad");
+        status("Stopped on the time limit — the answer may be unfinished.", "bad");
       } else if (ev.stopped === "context") {
-        status(`ran out of room to think — the page may be unfinished. ${summary}`, "bad");
+        status("Ran out of room to think — the answer may be unfinished.", "bad");
       } else {
-        status(summary);
+        status("");
       }
       break;
     }
 
     case "error":
+      clearGhost();
+      noticeFailed();
+      settleNotice("That turn failed");
       // A failed turn used to cost the reader their question: the error looked
       // like every other status line and the only way forward was to type it
       // again. It is kept, and it offers the thing they want.
@@ -1262,7 +2022,9 @@ composer.onStop = () => {
   // The server's abort path has always worked — closing the stream kills the
   // shell's whole process tree. It only ever lacked a button.
   turn?.abort();
-  status("stopped", "bad");
+  // Not "bad": the reader did this on purpose, and everything already
+  // written is kept. An alarm tone would make a choice look like a crash.
+  status("stopped — everything written so far is kept", "work");
 };
 
 composer.onOpen = () => { if (sessionId) setAim(currentAnchor()); };
@@ -1403,17 +2165,15 @@ composer.onSubmit = async (q) => {
   // sending, so anything typed arrives with it already empty.
   let selection = pendingSelection;
   pendingSelection = undefined;
-  // Typed while a workspace is in context: the turn is told which, exactly as
-  // a click on one of its rows would have.
-  if (!selection && context && panel.get(context)) {
-    selection = { app: context, page: context, control: "typed", option: "typed", label: q };
-  }
+  // One surface now, so a typed sentence needs no disambiguating: the agent
+  // is told which workspaces are open in every turn message, and a click
+  // still says exactly where it came from.
   // A click already says where it came from; an implicit anchor on top of it
   // would be a second, weaker answer to the same question.
   const anchor = fresh || selection ? undefined : (aim ?? currentAnchor());
   clearAim();
   think = "";
-  composer.working(q);
+  composer.working();
   panel.working(true);
   // The question goes on screen before anything answers it. Without this the
   // site sits exactly as it was until the agent's first block lands, and the
@@ -1428,6 +2188,8 @@ composer.onSubmit = async (q) => {
 
   try {
     const id = fresh ? await startSession() : sessionId!;
+    // What the reader chose before there was a session to choose it for.
+    if (fresh) await flushPendingSettings();
     attempted = true;               // this session has been used; it stays
     for await (const ev of runTurn(id, q, anchor, selection, turn.signal)) handle(ev);
   } catch (err) {
@@ -1453,8 +2215,22 @@ composer.onSubmit = async (q) => {
 /* ------------------------------------------------------------------- boot */
 
 side.onNew = () => void newSession();
+
+/**
+ * Deleting a session. The server route has always existed; it only ever
+ * lacked a button. Jobs, workspace, record — the directory goes whole.
+ */
+side.onDelete = async (id) => {
+  const r = await fetch(`/sessions/${id}`, { method: "DELETE" });
+  const out = await r.json() as { removed?: string; error?: string };
+  // The one refusal: a turn is running in it. Say so rather than half-work.
+  if (out.error) { status(out.error, "bad"); return; }
+  // Deleting the session you are looking at leaves you somewhere real —
+  // the empty state, ready to ask — never a view of a directory that is gone.
+  if (id === sessionId) await newSession({ focus: false });
+  void loadSessions();
+};
 side.onPick = (id) => { if (id !== sessionId) void openSession(id); };
-side.onPickSection = (page) => flow.gotoId(page);
 
 $("newsession").addEventListener("click", () => void newSession());
 $("searchmin").addEventListener("click", () => side.focusSearch());
@@ -1486,11 +2262,300 @@ $("sidetoggle").addEventListener("click",
 // out from under it.
 mountSettings(
   $("prefsbtn"), $("prefs"),
-  (open) => sideHost.classList.toggle("pinned", open),
+  (open) => {
+    sideHost.classList.toggle("pinned", open);
+    if (open) void paintPlatformSettings();
+  },
   // Text size and measure change how tall the site is, which changes whether
   // the reader is at the end of it.
   () => placeComposer(),
 );
+$("prefs").querySelector(".prefclose")!.addEventListener("click", () => {
+  $("prefs").hidden = true;
+  sideHost.classList.remove("pinned");
+});
+
+/**
+ * The control-room sections: providers, sandbox, tools, prompt. plans/49.
+ * Filled when settings opens, from the same endpoints the rest of the chrome
+ * uses — settings is a view of the platform, not a second copy of it.
+ */
+async function paintPlatformSettings() {
+  const [prov, plat, health, prompt] = await Promise.all([
+    fetch("/providers").then((r) => r.json()) as Promise<{ providers: ProviderInfo[] }>,
+    fetch("/platform").then((r) => r.json()) as Promise<{
+      sandboxed: boolean; sandbox: string;
+      net: { value: boolean; source: string };
+      credentials: { available: string[]; visible: string[]; source: string };
+      harness: {
+        turnMs: { value: number; source: string };
+        steps: { value: number; source: string };
+        jobMs: { value: number; source: string };
+        effort: { value: string; source: string };
+        fixed: { label: string; value: string; why: string }[];
+      };
+    }>,
+    fetch("/health").then((r) => r.json()) as Promise<{
+      tools?: { name: string; ok: boolean; checked: boolean; note?: string }[];
+    }>,
+    fetch("/prompt").then((r) => r.json()) as Promise<{ system: string }>,
+  ]);
+
+  /* ---- providers: name, state, key in or key out ---- */
+  const pbox = $("setproviders");
+  pbox.replaceChildren(...prov.providers.map((pr) => {
+    const line = document.createElement("div");
+    line.className = "provline";
+    const name = document.createElement("span");
+    name.className = "provname";
+    name.textContent = pr.title;
+    line.append(name);
+
+    if (pr.source === "env") {
+      const tag = document.createElement("span");
+      tag.className = "provenv";
+      tag.textContent = `${pr.keyEnv} (environment)`;
+      line.append(tag);
+    } else if (pr.hasKey) {
+      const tag = document.createElement("span");
+      tag.className = "provkeyed";
+      tag.textContent = "key set ✓";
+      const forget = document.createElement("button");
+      forget.type = "button";
+      forget.className = "provforget";
+      forget.textContent = "Forget";
+      forget.addEventListener("click", () => {
+        void fetch("/providers/key", {
+          method: "POST", body: JSON.stringify({ provider: pr.id, key: null }),
+        }).then(() => paintPlatformSettings());
+      });
+      line.append(tag, forget);
+    } else {
+      const form = document.createElement("form");
+      form.className = "keyform";
+      const input = document.createElement("input");
+      input.type = "password";
+      input.placeholder = pr.keyEnv;
+      input.autocomplete = "off";
+      const save = document.createElement("button");
+      save.type = "submit";
+      save.textContent = "Save";
+      form.append(input, save);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        if (!input.value.trim()) return;
+        void fetch("/providers/key", {
+          method: "POST",
+          body: JSON.stringify({ provider: pr.id, key: input.value.trim() }),
+        }).then(() => paintPlatformSettings());
+      });
+      line.append(form);
+    }
+    return line;
+  }));
+
+  /* ---- what the agent can do: four consequences, each with its lever ---- */
+  const sbox = $("setsandbox");
+  sbox.replaceChildren();
+
+  const lever = (mark: string, label: string) => {
+    const line = document.createElement("div");
+    line.className = "sbline";
+    const m = document.createElement("span");
+    m.className = "sbmark";
+    m.textContent = mark;
+    const l = document.createElement("span");
+    l.textContent = label;
+    line.append(m, l);
+    return line;
+  };
+
+  // 1. Computation — always on, and saying so is the point: a control that
+  //    does not exist should not look like one that is merely switched off.
+  const compute = lever("✓", "Compute with anything installed");
+  const always = document.createElement("span");
+  always.className = "sbwho";
+  always.textContent = "always — this is its hands";
+  compute.append(always);
+  sbox.append(compute);
+
+  // 2. Writing — the rule, since the directories vary per session.
+  const write = lever("✎", "Write only in each session's workspace, plus what you grant when it asks");
+  sbox.append(write);
+
+  // 3. The network.
+  const netLine = lever("⌁", "Reach the internet");
+  if (plat.net.source === "env") {
+    const who = document.createElement("span");
+    who.className = "sbwho";
+    who.textContent = `${plat.net.value ? "on" : "off"} · set by PERPETUAL_NET`;
+    netLine.append(who);
+  } else {
+    const t = document.createElement("button");
+    t.type = "button";
+    t.className = "sbtoggle" + (plat.net.value ? " on" : "");
+    t.textContent = plat.net.value ? "on" : "off";
+    t.addEventListener("click", () => {
+      void fetch("/platform", {
+        method: "POST", body: JSON.stringify({ net: !plat.net.value }),
+      }).then(async (r) => {
+        const out = await r.json() as { error?: string };
+        if (out.error) status(out.error, "bad");
+        void paintPlatformSettings();
+      });
+    });
+    netLine.append(t);
+  }
+  sbox.append(netLine);
+
+  // 4. Identity — the chips ARE the tool-approval system: gh without its
+  //    credential is an inert binary that prints "not logged in".
+  const credHead = lever("🔑", "Act as you");
+  const credWhy = document.createElement("span");
+  credWhy.className = "sbwho";
+  credWhy.textContent = "each identity off until you turn it on";
+  credHead.append(credWhy);
+  if (plat.credentials.source === "env") {
+    const who = document.createElement("span");
+    who.className = "sbwho";
+    who.textContent = "set by PERPETUAL_CREDENTIALS";
+    credHead.append(who);
+  }
+  sbox.append(credHead);
+
+  const grid = document.createElement("div");
+  grid.className = "credgrid";
+  for (const cname of plat.credentials.available) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    const on = plat.credentials.visible.includes(cname);
+    chip.className = "credchip" + (on ? " on" : "");
+    chip.textContent = cname;
+    chip.disabled = plat.credentials.source === "env";
+    chip.title = on
+      ? `${cname} is visible to the agent — click to hide it`
+      : `${cname} reads as empty inside the sandbox — click to make it visible`;
+    chip.addEventListener("click", () => {
+      const next = on
+        ? plat.credentials.visible.filter((c) => c !== cname)
+        : [...plat.credentials.visible, cname];
+      void fetch("/platform", {
+        method: "POST", body: JSON.stringify({ credentials: next }),
+      }).then(async (r) => {
+        const out = await r.json() as { error?: string };
+        if (out.error) status(out.error, "bad");
+        void paintPlatformSettings();
+      });
+    });
+    grid.append(chip);
+  }
+  sbox.append(grid);
+
+  const fact = document.createElement("div");
+  fact.className = "sbline";
+  const factText = document.createElement("span");
+  factText.className = "sbfact" + (plat.sandboxed ? "" : " toolbad");
+  factText.textContent = `Enforced by the kernel, not by a list: ${plat.sandbox}`;
+  fact.append(factText);
+  sbox.append(fact);
+
+  /* ---- harness: four dials, then the calibrations as facts ---- */
+  const hbox = $("setharness");
+  hbox.replaceChildren();
+
+  const dial = (label: string, opts: { v: string; label: string }[],
+    current: string, source: string, set: (v: string) => unknown) => {
+    const line = document.createElement("div");
+    line.className = "sbline";
+    const l = document.createElement("span");
+    l.textContent = label;
+    line.append(l);
+    if (source === "env") {
+      const who = document.createElement("span");
+      who.className = "sbwho";
+      who.textContent = `${current} · set by environment`;
+      line.append(who);
+    } else {
+      const seg = document.createElement("div");
+      seg.className = "seg";
+      for (const o of opts) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.dataset.v = o.v;
+        b.textContent = o.label;
+        b.classList.toggle("on", o.v === current);
+        b.addEventListener("click", () => void set(o.v));
+        seg.append(b);
+      }
+      line.append(seg);
+    }
+    hbox.append(line);
+  };
+
+  const setHarness = (patch: Record<string, unknown>) =>
+    fetch("/platform", { method: "POST", body: JSON.stringify({ harness: patch }) })
+      .then(async (r) => {
+        const out = await r.json() as { error?: string };
+        if (out.error) status(out.error, "bad");
+        void paintPlatformSettings();
+      });
+
+  const h = plat.harness;
+  dial("Turn time budget",
+    [{ v: "300000", label: "5m" }, { v: "600000", label: "10m" }, { v: "900000", label: "15m" }],
+    String(h.turnMs.value), h.turnMs.source,
+    (v) => setHarness({ turnMs: Number(v) }));
+  dial("Step backstop",
+    [{ v: "20", label: "20" }, { v: "40", label: "40" }, { v: "80", label: "80" }],
+    String(h.steps.value), h.steps.source,
+    (v) => setHarness({ steps: Number(v) }));
+  dial("Background job lifetime",
+    [{ v: "1800000", label: "30m" }, { v: "3600000", label: "1h" }, { v: "10800000", label: "3h" }],
+    String(h.jobMs.value), h.jobMs.source,
+    (v) => setHarness({ jobMs: Number(v) }));
+  dial("Reasoning effort",
+    [{ v: "default", label: "Model default" }, { v: "low", label: "Low" },
+     { v: "medium", label: "Med" }, { v: "high", label: "High" }],
+    h.effort.value, h.effort.source,
+    (v) => setHarness({ effort: v === "default" ? null : v }));
+
+  for (const f of h.fixed) {
+    const line = document.createElement("div");
+    line.className = "sbline fixedline";
+    const l = document.createElement("span");
+    l.textContent = f.label;
+    const v = document.createElement("span");
+    v.className = "sbwho";
+    v.textContent = f.value;
+    line.append(l, v);
+    line.title = f.why;
+    hbox.append(line);
+  }
+
+  /* ---- tools ---- */
+  const tbox = $("settools");
+  tbox.replaceChildren(...(health.tools ?? []).map((t) => {
+    const line = document.createElement("div");
+    line.className = "toolline";
+    const mark = document.createElement("span");
+    mark.className = t.ok ? "toolok" : "toolbad";
+    mark.textContent = t.ok ? (t.checked ? "✓" : "·") : "✗";
+    const name = document.createElement("span");
+    name.textContent = t.name;
+    line.append(mark, name);
+    if (t.note) {
+      const note = document.createElement("span");
+      note.className = "toolnote";
+      note.textContent = t.note;
+      line.append(note);
+    }
+    return line;
+  }));
+
+  /* ---- the prompt, verbatim ---- */
+  $("setprompt").textContent = prompt.system;
+}
+
 
 // A resize changes the frame the page has to fit inside.
 let resizing: number | undefined;
@@ -1522,21 +2587,23 @@ const health = await (await fetch("/health")).json() as {
   hasKey: boolean; model: string; provider: string; sandbox: string;
   replay: boolean; models?: string[];
 };
-$("badge").textContent = health.replay ? "replay" : health.provider ?? "model";
-// The sandbox is a fact about the machine and belongs in the sidebar's foot.
-// The MODEL moved to the composer, where it is a choice rather than a fact —
-// so this chip is gone and the one on the composer is the only one.
-$("sandbox").textContent = health.sandbox;
+// The provider and sandbox chips are gone from the foot: they were
+// configuration, and configuration reads in SETTINGS, which shows the same
+// facts with room to act on them. What stays visible without asking is what
+// the chrome cannot let the agent fake and the reader cannot miss:
+// Replay stamps the whole sidebar, not a chip. A subtle badge already cost a
+// whole evaluation once — a full-height edge cannot be read past.
 models = health.models ?? [];
 defaultModel = health.model;
 model = defaultModel;
 paintBar();
-// Chrome is the zone the agent cannot render or fake, which is exactly why an
-// unlocked session has to be visible HERE and not in anything it writes.
-$("sandbox").classList.toggle("unlocked", health.sandbox.includes("UNLOCKED"));
-// Replay stamps the whole sidebar, not a chip. A subtle badge already cost a
-// whole evaluation once — a full-height edge cannot be read past.
 sideHost.classList.toggle("replay", health.replay);
+// An UNSANDBOXED run is not a settings fact — it is a standing condition,
+// and it marks the settings button itself so it cannot go unseen.
+if (health.sandbox.includes("UNSANDBOXED")) {
+  $("prefsbtn").classList.add("unlocked");
+  $("prefsbtn").title = health.sandbox;
+}
 $("modedot").title = health.replay ? "replay — no model" : `${health.model} · ${health.sandbox}`;
 if (!health.hasKey) status("No API key set — export one and restart the controller", "bad");
 

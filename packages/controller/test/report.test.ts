@@ -136,3 +136,44 @@ test("an empty install says so instead of printing zeros", async () => {
   assert.match(out, /Nothing to report yet/);
   assert.match(out, /pnpm dev/);
 });
+
+/* ------------------------------------------------------------ the register
+ *
+ * plans/39 §4.5. `headless` and `brief` are the only numbers that say whether
+ * the agent varies how it replies. They were zero by construction until the
+ * heading became optional, so the counting has to be right from the first
+ * session or the whole plan is unfalsifiable.
+ */
+
+test("a section with no heading is counted as one", async () => {
+  const { store, id } = await fixture([], [
+    { kind: "prose", text: "Canberra — a compromise between Sydney and Melbourne." },
+  ]);
+  const r = await reportOn(store, [id]);
+  assert.equal(r.totals.headless, 1, "no heading is the short-answer register");
+  assert.equal(r.totals.brief, 1, "one block is three or fewer");
+});
+
+test("an article is not counted as either", async () => {
+  const { store, id } = await fixture([], [
+    { kind: "heading", text: "The claim" },
+    { kind: "prose", text: "a" }, { kind: "prose", text: "b" },
+    { kind: "prose", text: "c" }, { kind: "prose", text: "d" },
+  ]);
+  const r = await reportOn(store, [id]);
+  assert.equal(r.totals.headless, 0);
+  assert.equal(r.totals.brief, 0, "five blocks is not brief");
+});
+
+test("the scorecard prints the register line", async () => {
+  const { store, id } = await fixture([{
+    at: new Date(0).toISOString(), ask: "capital of australia?",
+    touched: ["001-x"], commands: [], steps: 1, stopped: "done",
+  }], [{ kind: "prose", text: "Canberra." }]);
+  const text = format(await reportOn(store, [id]));
+  assert.match(text, /REGISTER/);
+  assert.match(text, /no heading/);
+  // Counted, never judged: the report must not tell the agent it is wrong for
+  // writing headings, because on an explanation a heading is correct.
+  assert.match(text, /Neither number has a target/);
+});
