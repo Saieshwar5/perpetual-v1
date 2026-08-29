@@ -23,14 +23,13 @@
  * configuration.
  */
 import { readFile, readdir, stat } from "node:fs/promises";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { adaptersDir } from "./paths.ts";
 
 /** Where built-in adapters live, and where they appear inside the sandbox. */
 export const ADAPTERS_MOUNT = "/perpetual/tools";
 export const LOCAL_MOUNT = "/perpetual/tools.local";
-export const adaptersDir = () =>
-  join(dirname(fileURLToPath(import.meta.url)), "..", "adapters");
+export { adaptersDir } from "./paths.ts";
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -74,6 +73,8 @@ export interface Adapter {
    * loud (plans/15 rule 2 — never a silent downgrade).
    */
   unavailable?: string;
+  /** Its self-test ran and passed. Absent means not checked (yet). */
+  healthy?: boolean;
 }
 
 export interface AdapterProblem { name: string; message: string }

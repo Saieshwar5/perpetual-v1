@@ -25,9 +25,11 @@ import { randomUUID } from "node:crypto";
 import { createShell } from "./shell/tool.ts";
 import { describeSandbox, mountPath, type SandboxConfig } from "./shell/sandbox.ts";
 import { SiteWatcher } from "./watcher.ts";
+import { join } from "node:path";
 import { AppWatcher } from "./apps.ts";
 import { readSite } from "./site.ts";
-import { systemPrompt, turnMessage, NUDGE } from "./context.ts";
+import { systemPrompt, turnMessage, NUDGE, endsAskingToType } from "./context.ts";
+import { SpeechChannel, MAX_REJECT_NOTES } from "./speech.ts";
 import type { Runtime, Effort } from "./runtime.ts";
 import type { Anchor, Selection } from "@perpetual/shared/site";
 import type { StopCause, TurnEvent } from "@perpetual/shared/events";
@@ -39,10 +41,28 @@ import type { StopCause, TurnEvent } from "@perpetual/shared/events";
  * mid-verification. 22 sits comfortably above the observed ceiling and still
  * far below anything runaway.
  */
-const MAX_STEPS = 22;
+/**
+ * A BACKSTOP, not a policy. plans/48.
+ *
+ * It was 22, and it fired on effort: eighteen productive commands building a
+ * workspace looked exactly like the same failing command run eighteen times,
+ * and both were cut off mid-work. Futility now has its own, earlier signals —
+ * consecutive failures and repeated commands, told to the agent first and
+ * stopped only when telling did not help — so the cap only has to catch a
+ * genuine runaway, and a genuine runaway does not need a tight number.
+ */
+export const MAX_STEPS = 40;
+
+/** Consecutive failed commands: told at this many... */
+export const STUCK_TELL = 3;
+/** ...stopped at this many. Telling that did not help twice is an answer. */
+export const STUCK_STOP = 6;
+/** An identical command with an identical result: told at 2, stopped at 3. */
+export const REPEAT_TELL = 2;
+export const REPEAT_STOP = 3;
 /** How many steps out the agent is told it is running low. */
-const WARN_AT = 3;
-const MAX_TURN_MS = 5 * 60_000;
+export const WARN_AT = 3;
+export const MAX_TURN_MS = 5 * 60_000;
 const POLL_MS = 120;
 
 /**
@@ -91,6 +111,14 @@ export interface TurnOptions {
   answered?: Record<string, string>;
   chosen?: Record<string, string>;
   effort?: Effort;
+  /**
+   * The two budgets a reader may legitimately size to their work: how long a
+   * turn may run, and the step backstop behind the futility signals. Clamped
+   * HERE, not only in the UI — the server's bounds are the contract, the
+   * settings page's choices are convenience. Everything else about the loop
+   * is calibration, not preference, and is deliberately not a parameter.
+   */
+  limits?: { steps?: number; turnMs?: number };
   signal?: AbortSignal;
 }
 
@@ -99,6 +127,12 @@ export interface TurnSummary {
   steps: number;
   touched: string[];
   stopped: StopCause;
+  /**
+   * What went wrong, when `stopped` says something did. It used to be pushed
+   * to the reader's screen and never recorded, so a store full of failed
+   * turns had nothing to say about WHY any of them failed.
+   */
+  error?: string;
 }
 
 /**
@@ -162,17 +196,33 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
   const watcher = new SiteWatcher(o.sandbox.root);
   // The second tree: workspaces. Watched the same way and streamed down the
   // same channel, from the directory the seal does not reach.
-  const apps = new AppWatcher(o.sandbox.root);
+  const apps = new AppWatcher(o.sandbox.root,
+    (o.adapters ?? []).filter((a) => a.hasBin).map((a) => join(a.path, "bin")));
   // The same list the sandbox mounts read-only. The mount is the guarantee;
   // this is the backstop for the unsandboxed path, and the thing that decides
   // what the reader keeps seeing when a write gets through anyway.
   watcher.seal(o.sandbox.sealed ?? []);
   const shell = createShell(o.sandbox);
+  /**
+   * Speech: the model's own stream, routed. plans/40. Lines that are valid
+   * blocks land in the section this turn is writing; plain text stays status.
+   * The channel writes the FILE and then asks the watcher to look — it never
+   * pushes a page event itself, so the watcher stays the only source of them.
+   */
+  const speech = new SpeechChannel(o.sandbox.root, o.ask, {
+    status: (delta) => q.push({ type: "text_delta", delta }),
+    forming: (page, text, kind) => q.push({ type: "forming", page, text, kind }),
+    flush: () => flushRef(),
+  });
+  // `flush` is defined inside the summary closure below; this indirection is
+  // only so the channel can be built here, beside the shell it complements.
+  let flushRef: () => Promise<void> = async () => {};
   const commands: string[] = [];
   const touched = new Set<string>();
   let steps = 0;
   // Anything but "done" means the agent was cut off with work possibly left.
   let stopped: StopCause = "done";
+  let errText: string | undefined;
 
   const summary = (async (): Promise<TurnSummary> => {
     const started = Date.now();
@@ -187,15 +237,24 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
     const site = await watcher.prime();
     const openApps = await apps.prime();
     const before = new Set(site.pages.map((p) => p.id));
+    // Did this turn open a workspace? A turn with a live surface already gave
+    // the reader something to touch, so it is exempt from the choice nudge.
+    let sawApp = false;
 
     const flush = async () => {
       const evs = [...await watcher.poll(), ...await apps.poll()];
       for (const e of evs) {
         if (e.type === "page_open" || e.type === "page_replace") touched.add(e.page.id);
         else if (e.type === "page_block" || e.type === "page_meta") touched.add(e.page);
+        // Speech follows the section the turn is writing: a page the shell
+        // opens becomes the speech target, so the reply about a built page
+        // lands IN that page rather than in a rival numbered directory.
+        if (e.type === "page_open") speech.notice(e.page.id);
+        if (e.type === "app_open") sawApp = true;
       }
       q.push(...evs);
     };
+    flushRef = flush;
 
     // Poll while the model thinks and while commands run, so a page written
     // halfway through a long command still streams as it is written.
@@ -224,11 +283,24 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
         ...(o.chosen ? { chosen: o.chosen } : {}),
       }));
 
-      let nudged = false;
+      const maxSteps = Math.min(80, Math.max(10, o.limits?.steps ?? MAX_STEPS));
+      const maxTurnMs = Math.min(20 * 60_000, Math.max(60_000, o.limits?.turnMs ?? MAX_TURN_MS));
 
-      for (; steps < MAX_STEPS; steps++) {
+      let nudged = false;
+      let rejectNotes = 0;
+      /**
+       * FUTILITY, measured. plans/48. A step cap fires on effort; these fire
+       * on the two shapes of going nowhere — failing over and over, and doing
+       * the same thing expecting different output. Each is told to the agent
+       * first, through the tool result it is already reading, and only stops
+       * the turn when telling did not change anything.
+       */
+      let failStreak = 0;
+      const runCounts = new Map<string, number>();
+
+      for (; steps < maxSteps; steps++) {
         if (o.signal?.aborted) { stopped = "aborted"; break; }
-        if (Date.now() - started > MAX_TURN_MS) {
+        if (Date.now() - started > maxTurnMs) {
           stopped = "time";
           q.push({ type: "error", message: "Turn exceeded its time budget and was stopped." });
           break;
@@ -236,7 +308,7 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
         // Running out of budget is the agent's problem to solve, so tell it —
         // through the same channel it already acts on. A warned agent lands
         // the page; an unwarned one is cut off mid-sentence.
-        if (MAX_STEPS - steps - 1 <= WARN_AT) stopped = "steps";
+        if (maxSteps - steps - 1 <= WARN_AT) stopped = "steps";
 
         // Stopping here is a choice: the alternative is asking anyway and
         // having the provider refuse, which ends the turn in exactly the same
@@ -255,8 +327,13 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
           ...(o.signal ? { signal: o.signal } : {}),
         });
         for await (const ev of step) {
-          if (ev.type === "text_delta") q.push({ type: "text_delta", delta: ev.delta });
+          // Through the speech channel, not straight to the wire: lines that
+          // are blocks land on disk, everything else comes back out as the
+          // same status delta it always was.
+          if (ev.type === "text_delta") await speech.feed(ev.delta);
         }
+        // A model that stops mid-line has still finished its line.
+        await speech.endStep();
         const result = await step.result();
         usage.input += result.usage.input;
         usage.output += result.usage.output;
@@ -266,16 +343,35 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
 
         if (result.errorMessage) {
           stopped = "error";
+          errText = result.errorMessage;
           q.push({ type: "error", message: result.errorMessage });
           break;
         }
 
         if (result.calls.length === 0) {
           await flush();
+          // A rejected spoken line would otherwise vanish silently — there is
+          // no tool result coming to carry the error. Same channel as the
+          // nudge, capped so a model that keeps streaming bad JSON runs out
+          // of patience before it runs out of steps.
+          const spoken = speech.drainNotes();
+          if (spoken && rejectNotes < MAX_REJECT_NOTES) {
+            rejectNotes++;
+            convo.user(spoken);
+            continue;
+          }
           // The one guarantee the harness makes on the agent's behalf: a turn
           // that produced no page is not a finished turn. Exactly one nudge —
           // twice would be nagging a model that has genuinely nothing to add.
           if (touched.size === 0 && !nudged) { nudged = true; convo.user(NUDGE); continue; }
+          // FUNCTION, not only form: a turn that ends by asking the reader to
+          // type what it could have listed gets one chance to notice, through
+          // the same channel every other correction arrives on. Shares the
+          // nudge budget — one per turn is teaching, two is nagging.
+          if (!nudged && touched.size > 0 && openApps.length === 0 && !sawApp) {
+            const asking = endsAskingToType(await readSite(o.sandbox.root), touched);
+            if (asking) { nudged = true; convo.user(asking); continue; }
+          }
           stopped = "done";                    // it stopped because it finished
           break;
         }
@@ -293,6 +389,8 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
           const r = await shell.run({
             command,
             ...(typeof call.args.timeout === "number" ? { timeoutSec: call.args.timeout } : {}),
+            ...(typeof call.args.stdin === "string" ? { stdin: call.args.stdin } : {}),
+            ...(call.args.background === true ? { background: true } : {}),
             ...(o.signal ? { signal: o.signal } : {}),
             onOutput: (chunk) => q.push({ type: "tool_output", id, chunk }),
           });
@@ -302,17 +400,50 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
           });
 
           await flush();
+
+          // Futility, measured — see the constants above.
+          failStreak = r.exitCode === 0 ? 0 : failStreak + 1;
+          // Command AND its output: re-running a flaky test is legitimate
+          // exactly because the output differs. Same command, same result,
+          // is the definition of expecting something different to happen.
+          const fingerprint = `${command}\u0000${r.captured.totalLines}:${r.text.slice(0, 400)}`;
+          const seen = (runCounts.get(fingerprint) ?? 0) + 1;
+          runCounts.set(fingerprint, seen);
+
+          let futility: string | null = null;
+          if (seen >= REPEAT_STOP || failStreak >= STUCK_STOP) {
+            stopped = "stuck";
+            q.push({
+              type: "error",
+              message: seen >= REPEAT_STOP
+                ? "The same command kept producing the same result, and the turn was stopped."
+                : "Commands kept failing the same way, and the turn was stopped.",
+            });
+          } else if (seen >= REPEAT_TELL) {
+            futility = "[perpetual] You have run that exact command before and it produced " +
+              "the same output. Running it again will too — change the command, or act " +
+              "on what it already told you.";
+          } else if (failStreak >= STUCK_TELL) {
+            futility = `[perpetual] That is ${failStreak} failed commands in a row. Stop ` +
+              "and rethink: read the error, try a different approach, or tell the reader " +
+              "what is blocking you and finish the page with what you have.";
+          }
+
           const notes = [
+            speech.drainNotes(),
             watcher.drainFeedback(),
             apps.drainFeedback(),
             o.notes?.drain() ?? null,
+            futility,
             contextNote(context, o.runtime.contextWindow),
-            budgetNote(MAX_STEPS - steps - 1),
+            budgetNote(maxSteps - steps - 1),
           ].filter(Boolean).join("\n\n");
           convo.toolResult(call.id, "shell", notes ? `${r.text}\n\n${notes}` : r.text, false);
         }
+        if (stopped === "stuck") break;
       }
 
+      await speech.finish();
       await flush();
       const after = await readSite(o.sandbox.root);
       q.push({
@@ -324,13 +455,15 @@ export function runTurn(o: TurnOptions): AsyncIterable<TurnEvent> & { summary: P
       for (const id of after.pages.map((p) => p.id)) if (!before.has(id)) touched.add(id);
     } catch (e) {
       stopped = "error";
-      q.push({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      errText = e instanceof Error ? e.message : String(e);
+      q.push({ type: "error", message: errText });
     } finally {
       clearInterval(ticker);
       q.close();
     }
 
-    return { commands, steps, touched: [...touched], stopped };
+    return { commands, steps, touched: [...touched], stopped,
+      ...(errText ? { error: errText } : {}) };
   })();
 
   return Object.assign(q.drain(), { summary });

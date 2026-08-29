@@ -12,11 +12,16 @@
     "typecheck": "pnpm -r exec tsc --noEmit",
     "models": "pnpm --filter @perpetual/controller models",
     "report": "pnpm --filter @perpetual/controller report",
-    "blocks": "pnpm --filter @perpetual/controller blocks"
+    "blocks": "pnpm --filter @perpetual/controller blocks",
+    "desktop": "pnpm --filter @perpetual/desktop dev",
+    "desktop:probe": "pnpm --filter @perpetual/desktop probe",
+    "pack": "pnpm --filter @perpetual/client build && pnpm --filter @perpetual/desktop pack",
+    "smoke": "pnpm --filter @perpetual/desktop smoke"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "esbuild",
+      "electron"
     ]
   },
   "devDependencies": {

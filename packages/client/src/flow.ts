@@ -59,16 +59,72 @@ export class Flow {
    */
   private pinned = true;
 
+  /**
+   * ONE SCROLL AUTHORITY. plans/43.
+   *
+   * Three things used to move `scrollTop` independently: `stickToEnd` on every
+   * block, this ResizeObserver on every height change, and `toEnd`/`toTopOf`.
+   * Each did an INSTANT `scrollTo`, so a burst of growth became a burst of
+   * jumps — and one burst is guaranteed, because `.chart i` transitions its
+   * height for 300ms, firing the observer every frame it animates. Eighteen
+   * instant jumps in a third of a second is exactly what "glittery" looks
+   * like.
+   *
+   * Now nothing scrolls directly while following. Everything sets a TARGET and
+   * one rAF loop eases toward it, so growth from a running animation is
+   * absorbed rather than chased. A reader's own scroll cancels it instantly —
+   * the loop must never fight a hand on the wheel.
+   */
+  private follow: number | undefined;
+  /** Set while the loop itself is scrolling, so its own event is not a reader. */
+  private selfScrolling = false;
+
   constructor(host: HTMLElement) {
     this.host = host;
     host.addEventListener("scroll", () => this.onHostScroll(), { passive: true });
     window.addEventListener("keydown", (e) => this.onKey(e));
     if (typeof ResizeObserver !== "undefined") {
       this.grew = new ResizeObserver(() => {
-        if (this.pinned) this.host.scrollTo({ top: this.host.scrollHeight, behavior: "instant" });
+        // A request, not a scroll. The loop decides when and how far.
+        if (this.pinned) this.requestFollow();
         this.onScroll();
       });
     }
+  }
+
+  /**
+   * Ease toward the foot while pinned. One frame at a time, one loop total.
+   *
+   * The easing constant is doing real work: a fraction of the remaining
+   * distance per frame means a block landing moves the page a long way in the
+   * first few frames and settles, while a chart growing by two pixels a frame
+   * is followed exactly and invisibly. A fixed speed would do neither.
+   */
+  private requestFollow() {
+    if (this.follow !== undefined) return;
+    const step = () => {
+      this.follow = undefined;
+      if (!this.pinned) return;
+      const target = this.host.scrollHeight - this.host.clientHeight;
+      const gap = target - this.host.scrollTop;
+      if (gap <= 0.5) return;
+      this.selfScrolling = true;
+      // Snap the last pixel rather than easing forever toward it.
+      this.host.scrollTop = gap < 2 ? target : this.host.scrollTop + gap * 0.28;
+      this.selfScrolling = false;
+      this.follow = requestAnimationFrame(step);
+    };
+    this.follow = requestAnimationFrame(step);
+  }
+
+  /**
+   * Stay at the foot as the page grows, without jumping.
+   *
+   * What `stickToEnd` in the client used to do by hand, and the reason it
+   * cannot: it ran per BLOCK, and blocks arrive in clumps of five.
+   */
+  keepUp() {
+    if (this.pinned) this.requestFollow();
   }
 
   get index() { return this.current; }
@@ -146,13 +202,52 @@ export class Flow {
     if (i !== -1) this.goto(i, opts ?? {});
   }
 
-  /** Straight to the foot of the site — where a new section has just landed. */
-  toEnd(opts: { animate?: boolean } = {}) {
-    this.pinned = true;
+  /**
+   * Put this element's top at the top of the view — where a NEW QUESTION goes.
+   *
+   * `toEnd` is wrong for a question. It scrolls to the foot of the scroll, so
+   * the sentence the reader just sent lands at the bottom edge, half under the
+   * composer, and then the page crawls upward as the answer arrives beneath
+   * it. What a reader expects — and what every messaging surface does — is the
+   * opposite: their message goes to the TOP and the answer fills the space
+   * below it.
+   *
+   * The space has to exist for that to be possible: a scroller cannot put its
+   * last element at the top unless there is a screen of room under it. That is
+   * what `.turn:last-child { min-height }` in the stylesheet is for, and the
+   * two are a pair — change one and the other stops working.
+   */
+  toTopOf(el: HTMLElement, opts: { animate?: boolean } = {}) {
+    this.pinned = false;
+    // Measured, not derived from `offsetTop`: that is relative to the nearest
+    // POSITIONED ancestor, which is not necessarily the scroller — subtracting
+    // the host's own offset gave a number that was wrong by however far the
+    // host sits inside it, and the question stayed at the bottom of the view.
+    const top = this.host.scrollTop
+      + (el.getBoundingClientRect().top - this.host.getBoundingClientRect().top);
     this.host.scrollTo({
-      top: this.host.scrollHeight,
+      top: Math.max(0, top - 8),
       behavior: opts.animate === false ? "instant" : "smooth",
     });
+    this.announce();
+  }
+
+  /**
+   * Straight to the foot of the site.
+   *
+   * Still instant when asked — opening a session lands at its newest answer
+   * and a glide past unread work is scenery. What changed is that FOLLOWING
+   * the foot during a turn is no longer this method's job; `keepUp` owns it.
+   */
+  toEnd(opts: { animate?: boolean } = {}) {
+    this.pinned = true;
+    if (opts.animate === false) {
+      this.selfScrolling = true;
+      this.host.scrollTop = this.host.scrollHeight - this.host.clientHeight;
+      this.selfScrolling = false;
+    } else {
+      this.requestFollow();
+    }
     this.current = Math.max(0, this.sections.length - 1);
     this.announce();
   }
@@ -175,6 +270,12 @@ export class Flow {
   }
 
   private onHostScroll() {
+    // A reader's scroll cancels the follow. Ours does not — it would cancel
+    // itself on its own first frame.
+    if (!this.selfScrolling && this.follow !== undefined) {
+      cancelAnimationFrame(this.follow);
+      this.follow = undefined;
+    }
     this.pinned = this.atEnd;
     this.onScroll();
     if (this.jumping) return;

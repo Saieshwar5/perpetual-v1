@@ -13,14 +13,12 @@
  * and every turn pays full price.
  */
 import { readFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { promptsDir } from "./paths.ts";
 import type { Block } from "@perpetual/shared/blocks";
 import { choiceKey, doorKey } from "@perpetual/shared/site";
 import { describeAdapters, type Adapter } from "./adapters.ts";
 import type { Anchor, AppView, Selection, Site } from "@perpetual/shared/site";
-
-const PROMPTS = join(dirname(fileURLToPath(import.meta.url)), "..", "prompts");
 
 let cached: string | undefined;
 
@@ -28,8 +26,8 @@ let cached: string | undefined;
 export async function systemPrompt(): Promise<string> {
   if (cached) return cached;
   const [agent, rules] = await Promise.all([
-    readFile(join(PROMPTS, "agent.md"), "utf8"),
-    readFile(join(PROMPTS, "rules.md"), "utf8"),
+    readFile(join(promptsDir(), "agent.md"), "utf8"),
+    readFile(join(promptsDir(), "rules.md"), "utf8"),
   ]);
   cached = `${agent.trim()}\n\n---\n\n${rules.trim()}`;
   return cached;
@@ -72,6 +70,15 @@ function describeBlockShape(b: Block): string {
       return `a flow: ${b.steps.map((s) => s.label).join(" → ")}`;
     case "figure":
       return `the figure ${b.src}${b.caption ? ` ("${b.caption}")` : ""}`;
+    case "image":
+      return `the image ${b.src}${b.caption ? ` ("${b.caption}")` : ""}`;
+    case "grant":
+      return `a request for write access to ${b.path}`;
+    case "card":
+      return `a card${b.title ? ` titled "${b.title}"` : ""} beginning "${
+        b.text.slice(0, 40)}…"`;
+    case "stat":
+      return `the stat "${b.value} ${b.label}"`;
     case "link":
       return `a link to ${b.page}`;
     case "next":
@@ -129,10 +136,16 @@ function describeSelection(sel: Selection): string {
       `"${sel.option}". That is a fork: they are asking for a page that does not ` +
       "exist yet, so write one rather than amending the page they came from.";
   }
+  // A multi choice answers with several ids in one string. Spelling them out
+  // as a list is the difference between an answer the model reads and a token
+  // it has to notice the commas in.
+  const picked = sel.option.includes(",")
+    ? `by picking ${sel.option.split(",").map((x) => `\`${x}\``).join(", ")} — ${sel.label}`
+    : `by picking \`${sel.option}\` — ${sel.label}`;
   return `\nThe user did not type this — they answered your choice ` +
     `\`${sel.block}\` on **${sel.page}**` +
     (sel.prompt ? ` ("${sel.prompt}")` : "") +
-    ` by picking \`${sel.option}\` — ${sel.label}. That is the answer you were ` +
+    ` ${picked}. That is the answer you were ` +
     "waiting for: continue the work it was blocking. Do not ask again, and do not " +
     "rewrite the choice — the reader's answer stays on the page as the record of it.";
 }
@@ -220,7 +233,7 @@ export function turnMessage(
         a.blocks.length} block(s)${rows ? `, ${rows} pickable` : ""})`;
     }).join("\n");
     parts.push(
-      `\nWorkspaces open beside the site:\n${list}\n` +
+      `\nWorkspaces open in this session, drawn live in the reader's scroll:\n${list}\n` +
       "A workspace is a surface to work IN, not a record: rewrite " +
       "`ui/apps/<id>/view.ndjson` whenever the work moves on, and remove the " +
       "directory when it is finished with.",
@@ -274,10 +287,96 @@ export function turnMessage(
   );
   if (engagement) parts.push(engagement);
 
+  const typed = typedPick(opts.site, opts.ask, Boolean(opts.selection));
+  if (typed) parts.push(typed);
+
   if (opts.selection) parts.push(describeSelection(opts.selection));
+
+  // The decision that comes before the words, re-armed every turn because
+  // rules read once fade and the drift toward prose is constant. One sentence,
+  // ABOVE the ask: the ask stays the last thing in the message, always.
+  parts.push(
+    "\nDecide first: will the reader READ this reply, PICK from it, WORK in it, " +
+    "or APPROVE something? Build that — a page to read, a `choice` to tap, a " +
+    "workspace to work in, a `confirm` before anything irreversible. If your reply " +
+    "would end by asking them to type something you could have listed, you chose wrong.",
+  );
 
   parts.push(`\n--- The user now asks ---\n\n${opts.ask}`);
   return parts.join("\n");
+}
+
+/**
+ * FUNCTION, not only form — the one drift the validator cannot see.
+ *
+ * Every block can be perfectly shaped and the reply still the wrong KIND: a
+ * closing paragraph that asks the reader a question makes them TYPE what one
+ * tap could have answered. The validator enforces "is this block well-formed";
+ * nothing ever pushed back on "was this the right reply" — so the agent
+ * drifted to prose, the cheapest valid output, and the reader paid for it.
+ *
+ * Deliberately narrow, because a nudge that fires on rhetorical questions
+ * teaches the agent to ignore the channel: only the pages THIS turn wrote,
+ * only when the very last block is prose ending in a question mark, and only
+ * when the turn offered nothing tappable anywhere — no choice on its pages,
+ * and no workspace open beside them.
+ */
+export function endsAskingToType(site: Site, touched: ReadonlySet<string>): string | null {
+  const mine = site.pages.filter((p) => touched.has(p.id));
+  const page = mine.at(-1);
+  if (!page) return null;
+  if (mine.some((p) => p.blocks.some((b) => b.kind === "choice"))) return null;
+  const last = page.blocks.at(-1);
+  if (!last || (last.kind !== "prose" && last.kind !== "note")) return null;
+  if (!last.text.trim().endsWith("?")) return null;
+  return "[perpetual] Your reply ends by asking the reader a question in prose — " +
+    "they would have to TYPE the answer. If the answers are things you can list " +
+    "(which file, which way, what scope), replace that closing paragraph with a " +
+    "`choice` so one tap answers it: `page rm` the paragraph, append the choice. " +
+    "If the question genuinely needs a typed sentence, leave it as it is and stop.";
+}
+
+/**
+ * LAYER 3 of the same lesson, across turns: the reader typed their pick.
+ *
+ * When the ask is a short phrase that repeats an item the LAST page merely
+ * listed, the reader did by hand what a `choice` would have done in one tap —
+ * and this is the moment the cost is visible, so it is the moment to say so.
+ *
+ * Conservative on purpose: a typed ask only (a click already speaks for
+ * itself), a short one, matched word-for-word against listed items — list
+ * items and table cells, the shapes a pick-list wrongly becomes — and only
+ * when that page offered no choice of its own.
+ */
+const PICK_STOP = new Set([
+  "the", "this", "that", "these", "those", "what", "which", "show", "open",
+  "tell", "explain", "more", "about", "please", "with", "from", "does", "how",
+  "why", "one", "ones", "first", "second", "last", "yes", "okay",
+]);
+
+export function typedPick(site: Site, ask: string, hadSelection: boolean): string | null {
+  if (hadSelection) return null;
+  const words = ask.toLowerCase().split(/[^a-z0-9]+/).filter(
+    (w) => w.length >= 4 && !PICK_STOP.has(w));
+  if (!words.length || ask.trim().split(/\s+/).length > 6) return null;
+
+  const page = site.pages.at(-1);
+  if (!page || page.blocks.some((b) => b.kind === "choice")) return null;
+
+  const listed: string[] = [];
+  for (const b of page.blocks) {
+    if (b.kind === "list") listed.push(...b.items);
+    else if (b.kind === "table") for (const row of b.rows) listed.push(...row);
+  }
+  const hit = listed.some((item) => {
+    const it = item.toLowerCase();
+    return words.some((w) => it.includes(w));
+  });
+  if (!hit) return null;
+  return "\nThe reader's message repeats an item you LISTED on the last page — " +
+    "they had to type their pick. When a reply lists things the reader will " +
+    "choose between, make the list a `choice` (or a workspace) so one tap answers " +
+    "it. Do that with whatever this reply lists.";
 }
 
 export const NUDGE =

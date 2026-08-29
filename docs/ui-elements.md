@@ -38,7 +38,7 @@ A break inside a long explanation. A movement, not a second headline.
 
 ## Words
 
-Prose is the default, not the fallback.
+The connective tissue between the other shapes.
 
 ### `prose`
 
@@ -86,9 +86,33 @@ Literal text — a command, a file, an exact value. Nothing inside is interprete
 {"kind":"code","text":"npm run build","lang":"bash"}
 ```
 
+## Laid out
+
+Objects that take a `span` and sit beside each other. Any block may carry `span` — these two exist to be arranged.
+
+### `card`
+
+A bounded box holding one idea, so several can sit side by side and be compared at a glance.
+
+```json
+{"kind":"card","span":4,"title":"Intake","text":"The piston falls and the inlet valve opens."}
+```
+
+**Limits.** `tone` is "plain", "accent" or "warn". Give it a `span` — a card at full width is a note with a border.
+
+### `stat`
+
+One number, large, with what it measures and which way it is moving.
+
+```json
+{"kind":"stat","span":3,"value":"9:1","label":"Compression ratio","delta":"vs 17:1 for diesel","trend":"flat"}
+```
+
+**Limits.** `trend` is "up", "down" or "flat" and decides the colour. For two to four numbers you are not arranging yourself, `metrics` is less work.
+
 ## Numbers
 
-Only when the content genuinely is that shape.
+When the shape of the numbers is the point.
 
 ### `metrics`
 
@@ -154,6 +178,26 @@ A drawing, when a relationship is spatial and prose cannot say it.
 
 **Limits.** An SVG the agent writes beside the page. A viewBox is required, no width or height, and no colour may be named — only currentColor and the palette tokens.
 
+### `image`
+
+A picture that is not a drawing: a screenshot, a photograph, a page of a PDF rendered to PNG. `figure` is SVG and only SVG, because SVG is markup and markup has to be sanitised before it can be inlined; an image is bytes.
+
+```json
+{"kind":"image","src":"page-1.png","alt":"The resume's first page","caption":"As it prints"}
+```
+
+**Limits.** A `.png/.jpg/.gif/.webp/.avif` file in the section's own directory — no paths, no `..`. Never inlined: the client fetches it from the controller by name, so a large picture costs one request rather than a megabyte of base64 in every event that mentions it. Write `alt`.
+
+### `grant`
+
+Ask the reader for write access to one directory. The one block whose button is not the agent's: **Allow** goes to a controller endpoint nothing in the sandbox can reach, so the agent can request access and can never grant itself any.
+
+```json
+{"kind":"grant","path":"~/Downloads","reason":"to rename the seven resumes in place, so the originals are the ones that change"}
+```
+
+**Limits.** One directory, absolute or under `~`, held to the home directory, and it must already have been asked for on the page before the endpoint will honour it. Grants last as long as the session.
+
 ## Interaction
 
 The reader answers by touching, never by being asked to type.
@@ -198,7 +242,7 @@ The list you scan and act on: an inbox, a file list, search results.
 {"kind":"rows","id":"inbox","items":[{"id":"m1","title":"Invoice #4821","meta":"Acme · yesterday","state":"unread","run":"mail show 4821","actions":[{"id":"arch","label":"Archive","run":"mail archive 4821"}]}]}
 ```
 
-**Limits.** Up to 50 rows, `state` is unread/done/warn, at most 3 actions each.
+**Limits.** Up to 50 rows, `state` is unread/done/warn, at most 3 actions each. `"filter": true` adds a box that narrows the list as the reader types — entirely client-side, so no command, no turn, no cost. Worth it past about a dozen rows.
 
 ### `fields`  · workspace only
 
@@ -232,4 +276,4 @@ The gate before anything irreversible or outward-facing.
 
 ---
 
-20 kinds. Inline, inside text, there are exactly three marks: `**bold**` names a term, `*italic*` stresses a word, `` `code` `` is an exact value. Nothing else renders.
+22 kinds. Inline, inside text, there are exactly three marks: `**bold**` names a term, `*italic*` stresses a word, `` `code` `` is an exact value. Nothing else renders.

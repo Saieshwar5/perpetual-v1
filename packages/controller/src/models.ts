@@ -30,7 +30,7 @@ const rows = models.getModels(providerId)
   .sort((a, b) => a.inCost - b.inCost);
 
 console.log(`\n  ${providerId} — ${rows.length} models   (key: ${entry.keyEnv})`);
-console.log(`  default: ${entry.defaultModel.replace(entry.prefix ?? "", "")}\n`);
+console.log(`  default: ${(entry.defaultModel ?? rows[0]?.short ?? "-").replace(entry.prefix ?? "", "")}\n`);
 console.log(`  ${"model".padEnd(42)}${"context".padStart(10)}${"$in/M".padStart(9)}${"$out/M".padStart(9)}  api`);
 for (const r of rows) {
   console.log(

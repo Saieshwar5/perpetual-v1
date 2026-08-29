@@ -14,6 +14,16 @@
 import { createModels, Type, type Context, type Message, type Provider, type Tool } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { fireworksProvider } from "@earendil-works/pi-ai/providers/fireworks";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { googleProvider } from "@earendil-works/pi-ai/providers/google";
+import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
+import { groqProvider } from "@earendil-works/pi-ai/providers/groq";
+import { mistralProvider } from "@earendil-works/pi-ai/providers/mistral";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import { togetherProvider } from "@earendil-works/pi-ai/providers/together";
+import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
+import { cerebrasProvider } from "@earendil-works/pi-ai/providers/cerebras";
+import { moonshotaiProvider } from "@earendil-works/pi-ai/providers/moonshotai";
 import { DEFAULT_TIMEOUT_SEC } from "./shell/tool.ts";
 
 export type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -93,22 +103,48 @@ export interface Runtime {
 export const PROVIDERS: Record<string, {
   make(): Provider;
   keyEnv: string;
-  defaultModel: string;
+  /** Falls back to the first of the provider's catalogue when absent. */
+  defaultModel?: string;
   /** Prefix that turns a short model name into a catalogue id. */
   prefix?: string;
+  /** Reads as a name in the chrome. */
+  title: string;
 }> = {
   anthropic: {
-    make: anthropicProvider,
+    make: anthropicProvider, title: "Anthropic",
     keyEnv: "ANTHROPIC_API_KEY",
     defaultModel: "claude-opus-5",
   },
   fireworks: {
-    make: fireworksProvider,
+    make: fireworksProvider, title: "Fireworks",
     keyEnv: "FIREWORKS_API_KEY",
     defaultModel: "accounts/fireworks/models/deepseek-v4-pro",
     prefix: "accounts/fireworks/models/",
   },
+  // The rest of pi-ai's key-based catalogue, one row each — the whole point
+  // of the row shape. A provider whose key is not set is still LISTED, with
+  // the way to set one; a silently missing provider looks exactly like an
+  // unsupported one, which is the failure the registry exists to avoid.
+  openai: { make: openaiProvider, title: "OpenAI", keyEnv: "OPENAI_API_KEY" },
+  google: { make: googleProvider, title: "Google", keyEnv: "GEMINI_API_KEY" },
+  deepseek: { make: deepseekProvider, title: "DeepSeek", keyEnv: "DEEPSEEK_API_KEY" },
+  groq: { make: groqProvider, title: "Groq", keyEnv: "GROQ_API_KEY" },
+  mistral: { make: mistralProvider, title: "Mistral", keyEnv: "MISTRAL_API_KEY" },
+  openrouter: { make: openrouterProvider, title: "OpenRouter", keyEnv: "OPENROUTER_API_KEY" },
+  together: { make: togetherProvider, title: "Together", keyEnv: "TOGETHER_API_KEY" },
+  xai: { make: xaiProvider, title: "xAI", keyEnv: "XAI_API_KEY" },
+  cerebras: { make: cerebrasProvider, title: "Cerebras", keyEnv: "CEREBRAS_API_KEY" },
+  moonshotai: { make: moonshotaiProvider, title: "Moonshot", keyEnv: "MOONSHOT_API_KEY" },
 };
+
+/** A provider's model catalogue, ids only — for pickers and validation. */
+export function catalogueOf(providerId: string): string[] {
+  const entry = PROVIDERS[providerId];
+  if (!entry) return [];
+  const models = createModels();
+  models.setProvider(entry.make());
+  return models.getModels(providerId).map((m) => m.id);
+}
 
 /**
  * The one tool. Two fields — see plans/15 §2 on why the schema stays tiny and
@@ -127,8 +163,10 @@ export function shellTool(sandboxNote: string): Tool {
     description:
       "Run a bash command. This is your only tool; it is how you read, write, search, " +
       "transform, and inspect.\n\n" +
-      `Each command runs in a FRESH bash. \`cd\` persists between commands; exported ` +
-      "variables and sourced environments do NOT — chain them with `&&` in one command.\n\n" +
+      "Each command runs in a FRESH bash, starting in the session's record. Nothing " +
+      "persists between commands — not `cd`, not exported variables, not sourced " +
+      "environments. Chain with `&&` in one command, and say where you are working " +
+      "every time.\n\n" +
       sandboxNote + "\n\n" +
       "stdout and stderr are interleaved. The exit code is always reported. Long output " +
       "is truncated head-and-tail and the full text is written to a file whose path you " +
@@ -137,6 +175,16 @@ export function shellTool(sandboxNote: string): Tool {
       command: Type.String({ description: "The bash command to run." }),
       timeout: Type.Optional(Type.Number({
         description: `Seconds before the command is killed. Default ${DEFAULT_TIMEOUT_SEC}.`,
+      })),
+      stdin: Type.Optional(Type.String({
+        description: "Text piped to the command's standard input, then closed. " +
+          "For anything that reads stdin — never for secrets.",
+      })),
+      background: Type.Optional(Type.Boolean({
+        description: "Start this as a background job that OUTLIVES the turn — for a " +
+          "long build, a training run, a server. Returns at once with a log path in " +
+          "the workspace; read that file later to check on it. At most 4 per session, " +
+          "killed after 30 minutes or when the app quits.",
       })),
     }),
   };
@@ -158,7 +206,9 @@ export function createRuntime(
 
   // Fireworks ids are paths (`accounts/fireworks/models/deepseek-v4-pro`), so
   // accept the short name too — nobody should have to type the prefix.
-  const asked = opts.model ?? entry.defaultModel;
+  const asked = opts.model ?? entry.defaultModel
+    ?? models.getModels(providerId)[0]?.id
+    ?? (() => { throw new Error(`Provider "${providerId}" has an empty catalogue.`); })();
   const model = models.getModel(providerId, asked)
     ?? (entry.prefix ? models.getModel(providerId, entry.prefix + asked) : undefined);
   if (!model) {

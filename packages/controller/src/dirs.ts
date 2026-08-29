@@ -10,12 +10,28 @@
  * The reader is choosing a folder, and everything beyond its name is a detail
  * they did not ask this endpoint for.
  */
-import { readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve, dirname, sep } from "node:path";
 
 /** Enough to fill a picker; a directory with more than this is not being browsed. */
 const MAX_ENTRIES = 300;
+
+/**
+ * There is no shared default workspace any more. plans/45.
+ *
+ * There used to be one — `~/perpetual`, handed to every session at birth — and
+ * one directory for every session that ever ran is the wrong shape twice over:
+ * last week's work sits in the way of today's, and deleting a session leaves
+ * its files behind with nothing to say whose they were.
+ *
+ * A session now writes in its OWN directory, inside its own record, which
+ * makes every session independent by construction and takes its workspace with
+ * it when it goes. See `sessionWorkspace` in shell/sandbox.ts. What the reader
+ * picks here is the directory they want the work to happen in INSTEAD — a real
+ * project on their disk — and anything further is granted one directory at a
+ * time, by them, through `grant`.
+ */
 
 export interface DirListing {
   path: string;

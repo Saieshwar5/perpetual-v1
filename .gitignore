@@ -21,6 +21,12 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+# The desktop build: `stage/` is assembled from the packages on every run and
+# `release/` is the installers. Both are outputs. `packaging/` is NOT — it
+# holds the icon and the builder config, which are source, and which is why it
+# is not called `build/`.
+packages/desktop/stage/
+packages/desktop/release/
 
 # --- logs and scratch -----------------------------------------------------
 *.log

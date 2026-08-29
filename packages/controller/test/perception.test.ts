@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NoteQueue } from "../src/notes.ts";
-import { turnMessage } from "../src/context.ts";
+import { turnMessage, endsAskingToType, typedPick } from "../src/context.ts";
 import { doorKey, choiceKey } from "@perpetual/shared/site";
 import type { RenderReport } from "@perpetual/shared/render";
 import type { Site } from "@perpetual/shared/site";
@@ -207,3 +207,85 @@ test("a report that arrives mid-turn lands in the agent's next tool result", asy
   assert.match(withNote!, /3\.1 screens/);
   assert.match(withNote!, /hello/, "and it rides WITH the command output, not instead of it");
 });
+
+/* --------------------------------------- function, not only form: the drift */
+
+const pageWith = (id: string, blocks: unknown[]): Site["pages"][0] => ({
+  id, title: "T", tier: 1, layout: "column", blocks: blocks as never,
+});
+
+test("a reply that ends by asking the reader to type gets one nudge", () => {
+  const site: Site = { pages: [pageWith("001-files", [
+    { kind: "prose", text: "Three resumes match." },
+    { kind: "list", items: ["a.pdf", "b.pdf", "c.pdf"] },
+    { kind: "prose", text: "Which of these did you mean?" },
+  ])], problems: [] };
+  const msg = endsAskingToType(site, new Set(["001-files"]));
+  assert.ok(msg, "the drift is caught");
+  assert.match(msg!, /TYPE the answer/);
+  assert.match(msg!, /`choice`/);
+});
+
+test("a turn that already offered something tappable is left alone", () => {
+  const withChoice: Site = { pages: [pageWith("001-files", [
+    { kind: "prose", text: "Three match. Which one?" },
+    { kind: "choice", id: "which", prompt: "Which one?",
+      options: [{ id: "a", label: "a.pdf" }, { id: "b", label: "b.pdf" }] },
+  ])], problems: [] };
+  assert.equal(endsAskingToType(withChoice, new Set(["001-files"])), null);
+
+  // Ends with doors, not a question: the page already hands the reader taps.
+  const withNext: Site = { pages: [pageWith("001-tcp", [
+    { kind: "prose", text: "That is the handshake." },
+    { kind: "next", items: ["Why three messages?"] },
+  ])], problems: [] };
+  assert.equal(endsAskingToType(withNext, new Set(["001-tcp"])), null);
+});
+
+test("only this turn's pages are judged — an old page's question is history", () => {
+  const site: Site = { pages: [pageWith("001-old", [
+    { kind: "prose", text: "Which of these did you mean?" },
+  ])], problems: [] };
+  assert.equal(endsAskingToType(site, new Set()), null);
+  assert.equal(endsAskingToType(site, new Set(["002-new"])), null);
+});
+
+test("a statement ending is not a question — no nudge for finished answers", () => {
+  const site: Site = { pages: [pageWith("001-a", [
+    { kind: "prose", text: "Canberra — chosen in 1908." },
+  ])], problems: [] };
+  assert.equal(endsAskingToType(site, new Set(["001-a"])), null);
+});
+
+test("the reader typing their pick from a listed page is said out loud", () => {
+  const site: Site = { pages: [pageWith("001-resumes", [
+    { kind: "prose", text: "Seven resumes found:" },
+    { kind: "list", items: [
+      "Sai_Eshwar_Gandrath_ATS_Resume.md — 14 KB",
+      "resume_web_developer.pdf — 90 KB",
+    ] },
+  ])], problems: [] };
+  const line = typedPick(site, "the ATS_Resume one", false);
+  assert.ok(line, "the typed pick is noticed");
+  assert.match(line!, /had to type their pick/);
+
+  // A click already speaks for itself; a long sentence is not a pick; a page
+  // that DID offer a choice owes nothing.
+  assert.equal(typedPick(site, "the ATS_Resume one", true), null);
+  assert.equal(typedPick(site,
+    "can you explain what makes the ATS_Resume version different from the others", false), null);
+  const offered: Site = { pages: [pageWith("001-r", [
+    { kind: "list", items: ["ATS_Resume.md"] },
+    { kind: "choice", id: "w", prompt: "Which?",
+      options: [{ id: "a", label: "ATS_Resume.md" }, { id: "b", label: "other" }] },
+  ])], problems: [] };
+  assert.equal(typedPick(offered, "the ATS_Resume one", false), null);
+});
+
+test("every turn message carries the read-pick-work-approve decision, above the ask", () => {
+  const msg = turnMessage({ ask: "hello", site: { pages: [], problems: [] }, pastAsks: [] });
+  assert.match(msg, /READ this reply, PICK from it, WORK in it/);
+  assert.ok(msg.indexOf("Decide first") < msg.indexOf("--- The user now asks ---"),
+    "the ask stays the last thing in the message");
+});
+

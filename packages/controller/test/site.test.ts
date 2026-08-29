@@ -183,10 +183,14 @@ test("a regenerated figure swaps one block, keeping the reader's place", async (
   await rm(d, { recursive: true, force: true });
 });
 
-test("a page opens with its heading, and has only one", async () => {
+test("a section has at most one heading, and it opens the section", async () => {
   // Found by running it: the first real model run put FOUR heading blocks on
   // one page, and every one rendered as an <h1>. The vocabulary had one word
-  // for two jobs; now it has two, and the positions are checked.
+  // for two jobs; now it has two, and the count is checked.
+  //
+  // What is NOT checked any more is that there is one at all. plans/39 §4.1:
+  // requiring a headline on a two-sentence reply is what made every answer
+  // look like a magazine piece.
   const d = await fixture();
   await page(d, "001-good", { title: "A" },
     '{"kind":"heading","text":"The claim"}\n{"kind":"prose","text":"a"}\n' +
@@ -194,14 +198,19 @@ test("a page opens with its heading, and has only one", async () => {
   await page(d, "002-four-h1", { title: "B" },
     '{"kind":"heading","text":"one"}\n{"kind":"heading","text":"two"}\n{"kind":"heading","text":"three"}\n', true);
   await page(d, "003-no-head", { title: "C" },
-    '{"kind":"prose","text":"straight into it"}\n', true);
+    '{"kind":"prose","text":"Canberra — chosen in 1908 as a compromise."}\n');
+  await page(d, "004-late-head", { title: "D" },
+    '{"kind":"prose","text":"a"}\n{"kind":"heading","text":"halfway down"}\n', true);
 
   const site = await readSite(d);
   const forPage = (id: string) => site.problems.filter((p) => p.page === id);
 
   assert.deepEqual(forPage("001-good"), [], "heading then sections is correct");
-  assert.match(forPage("002-four-h1")[0]!.message, /3 `heading` blocks.*exactly one.*Use `section`/s);
-  assert.match(forPage("003-no-head")[0]!.message, /first block is a `prose`.*opens with its `heading`/s);
+  assert.match(forPage("002-four-h1")[0]!.message, /3 `heading` blocks.*at most one.*Use `section`/s);
+  // THE POINT OF THIS PLAN. A bare answer is a whole reply, not a broken page.
+  assert.deepEqual(forPage("003-no-head"), [],
+    "a section with no heading is a short answer, which is allowed");
+  assert.match(forPage("004-late-head")[0]!.message, /`heading` is not the first block/);
   await rm(d, { recursive: true, force: true });
 });
 

@@ -12,17 +12,18 @@
  *   the scroll itself, where the questions belong; what is left — where am I,
  *   what else is there, what is this running on — fits here with room to spare.
  *
- * The active session opens to show its sections, so the sidebar answers both
- * questions a reader has at once: which site am I in, and where in it. That
- * is the rail's map, in a place wide enough to read.
+ * It lists SESSIONS AND NOTHING ELSE. The active session used to expand into
+ * a numbered thread of every question asked in it — the rail's map, rehoused.
+ * It was answering a question nobody had: the reader is looking at the scroll,
+ * which already holds those questions in order, standing above the answers
+ * they produced. A second copy in the margin was a table of contents for a
+ * document you are already inside.
+ *
+ * The asks are still SEARCHED, though never shown. Typing "canberra" finds
+ * the session that answered it, which is the one thing the thread was
+ * genuinely good for and costs nothing to keep.
  */
 import type { SessionIndex } from "@perpetual/shared/site";
-
-export interface SideSection {
-  id: string;
-  /** The reader's own question, which is how they will look for it. */
-  label: string;
-}
 
 /** How the list is grouped. Recency, because that is how anyone looks for one. */
 const BUCKETS: { label: string; within: number }[] = [
@@ -31,6 +32,15 @@ const BUCKETS: { label: string; within: number }[] = [
   { label: "Previous 7 days", within: 8 },
   { label: "Earlier", within: Infinity },
 ];
+
+/** Enough to tell two same-named sessions apart, and no more. */
+function whenOf(iso: string): string {
+  const d = new Date(iso);
+  const days = (Date.now() - d.getTime()) / 86_400_000;
+  if (days < 1) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: "short" });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 function bucketOf(iso: string): string {
   const days = (Date.now() - Date.parse(iso)) / 86_400_000;
@@ -42,14 +52,13 @@ export class Sidebar {
   private list: HTMLElement;
   private search: HTMLInputElement;
   private sessions: SessionIndex[] = [];
-  private sections: SideSection[] = [];
   private activeSession: string | null = null;
-  private activeSection: string | null = null;
   private filter = "";
 
   onPick: (id: string) => void = () => {};
-  onPickSection: (page: string) => void = () => {};
   onNew: () => void = () => {};
+  /** The reader deleted a session. Irreversible — the directory IS the session. */
+  onDelete: (id: string) => void = () => {};
 
   constructor(root: HTMLElement, list: HTMLElement, search: HTMLInputElement) {
     this.root = root;
@@ -76,19 +85,6 @@ export class Sidebar {
 
   setActive(id: string | null) {
     this.activeSession = id;
-    this.paint();
-  }
-
-  /** The sections of the session being read — the rail's map, rehoused. */
-  setSections(sections: SideSection[], active: string | null = null) {
-    this.sections = sections;
-    this.activeSection = active;
-    this.paint();
-  }
-
-  setActiveSection(page: string | null) {
-    if (page === this.activeSection) return;
-    this.activeSection = page;
     this.paint();
   }
 
@@ -120,6 +116,16 @@ export class Sidebar {
     const rows: HTMLElement[] = [];
     let bucket = "";
 
+    // Two sessions with the same name is not a bug to prevent — "Resume
+    // cleanup" twice is honest — but it IS the difference between finding one
+    // and opening both. The duplicates say when they were, and only the
+    // duplicates: a date on every row would be noise on the ones that need no
+    // telling apart.
+    const seen = new Map<string, number>();
+    for (const s of shown) seen.set(s.title, (seen.get(s.title) ?? 0) + 1);
+    const ambiguous = new Set(
+      [...seen].filter(([, n]) => n > 1).map(([t]) => t));
+
     for (const s of shown) {
       // Grouped by recency, and the heading appears only when the bucket
       // changes — a label per row would be noise, not structure.
@@ -131,10 +137,7 @@ export class Sidebar {
         h.textContent = b;
         rows.push(h);
       }
-      rows.push(this.sessionRow(s));
-      if (s.id === this.activeSession && this.sections.length) {
-        rows.push(this.sectionList());
-      }
+      rows.push(this.sessionRow(s, ambiguous.has(s.title)));
     }
 
     if (!shown.length) {
@@ -149,7 +152,7 @@ export class Sidebar {
     this.list.replaceChildren(...rows);
   }
 
-  private sessionRow(s: SessionIndex): HTMLElement {
+  private sessionRow(s: SessionIndex, ambiguous = false): HTMLElement {
     const b = document.createElement("button");
     b.type = "button";
     b.className = s.id === this.activeSession ? "srow on" : "srow";
@@ -164,28 +167,47 @@ export class Sidebar {
     label.textContent = s.title;
 
     b.append(dot, label);
+    if (ambiguous) {
+      const when = document.createElement("span");
+      when.className = "swhen";
+      when.textContent = whenOf(s.updatedAt);
+      b.append(when);
+      b.title = `${s.title} · ${when.textContent}`;
+    }
+
+    /**
+     * Deleting, in two touches and zero dialogs. plans/49.
+     *
+     * The ✕ appears on hover; the first click turns it into "Sure?" for a
+     * few seconds; the second actually deletes. A dialog would be heavier
+     * than the decision — but ONE click would be lighter than it, because a
+     * session is its directory and deleting one is deleting everything it
+     * ever wrote. Two clicks, the second one warned, is the weight of the
+     * thing being done.
+     */
+    const del = document.createElement("span");
+    del.className = "sdel";
+    del.textContent = "✕";
+    del.setAttribute("role", "button");
+    del.setAttribute("aria-label", `Delete "${s.title}"`);
+    del.title = "Delete this session — everything it wrote goes with it";
+    let armed: number | undefined;
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();                 // never also OPEN what is being deleted
+      if (del.classList.contains("armed")) {
+        clearTimeout(armed);
+        this.onDelete(s.id);
+        return;
+      }
+      del.classList.add("armed");
+      del.textContent = "Sure?";
+      armed = setTimeout(() => {
+        del.classList.remove("armed");
+        del.textContent = "✕";
+      }, 3000) as unknown as number;
+    });
+    b.append(del);
     b.addEventListener("click", () => this.onPick(s.id));
     return b;
-  }
-
-  private sectionList(): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.className = "ssections wide";
-    for (const [i, sec] of this.sections.entries()) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = sec.id === this.activeSection ? "ssec on" : "ssec";
-      b.dataset.page = sec.id;
-      const n = document.createElement("span");
-      n.className = "n";
-      n.textContent = String(i + 1).padStart(2, "0");
-      const label = document.createElement("span");
-      label.className = "slabel";
-      label.textContent = sec.label;
-      b.append(n, label);
-      b.addEventListener("click", () => this.onPickSection(sec.id));
-      wrap.append(b);
-    }
-    return wrap;
   }
 }

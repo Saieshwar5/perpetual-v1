@@ -14,16 +14,15 @@
  * every page. One home now: the size is a class, so nothing is moved, nothing
  * is blurred, and no page carries space for a composer that is not there.
  *
- * It also carries the turn while it runs. Three states:
+ * IT IS AN INPUT, AND NOTHING ELSE. It used to carry the running turn as
+ * well — the live command, a tail of its output, a toggle to reveal the bash.
+ * That made the place you TYPE into the place the machine reported on itself,
+ * and the two have nothing to do with each other. What the agent is doing now
+ * appears in the scroll, beside the answer it is producing, where the reader
+ * is already looking.
  *
- *   idle   "Ask ⌘K"
- *   open   the input, focused
- *   busy   the live command, its output tail, and a stop button
- *
- * Folding those together is deliberate. Status about a turn belongs where you
- * started the turn, not in a corner of the chrome — and it is what finally
- * makes a turn cancellable, since the abort path has always worked server-side
- * and only ever lacked a button.
+ * What stays here is what belongs to the act of asking: the question, what it
+ * is pointed at, and the way to stop a turn you no longer want.
  */
 export type ComposerState = "idle" | "open" | "busy";
 
@@ -38,16 +37,8 @@ export class Composer {
 
   private aimEl: HTMLElement;
   private aimText: HTMLElement;
-  private ctxEl: HTMLElement;
-  private ctxText: HTMLElement;
-  private verbEl: HTMLElement;
-  private rawBtn: HTMLButtonElement;
-  private rawEl: HTMLElement;
-  private cmdEl: HTMLElement;
-  private outEl: HTMLElement;
   private statusEl: HTMLElement;
   private state: ComposerState = "idle";
-  private wantsCompact = true;
   /**
    * The pointer is resting ON the composer.
    *
@@ -68,8 +59,6 @@ export class Composer {
   onClose: () => void = () => {};
   /** The reader stopped pointing at a block, without closing the composer. */
   onUnaim: () => void = () => {};
-  /** The reader dropped the workspace context — the next question is about the site. */
-  onUncontext: () => void = () => {};
 
   constructor(root: HTMLElement, floatHost: HTMLElement) {
     this.root = root;
@@ -79,14 +68,6 @@ export class Composer {
     this.input = root.querySelector("input")!;
     this.aimEl = root.querySelector(".aim")!;
     this.aimText = root.querySelector(".aimtext")!;
-    this.ctxEl = root.querySelector(".ctx")!;
-    this.ctxText = root.querySelector(".ctxtext")!;
-    root.querySelector(".ctxoff")!.addEventListener("click", () => this.onUncontext());
-    this.verbEl = root.querySelector(".verb")!;
-    this.rawBtn = root.querySelector(".rawbtn")!;
-    this.rawEl = root.querySelector(".raw")!;
-    this.cmdEl = root.querySelector(".cmd")!;
-    this.outEl = root.querySelector(".out")!;
     this.statusEl = root.querySelector(".pstatus")!;
 
     root.querySelector(".stop")!.addEventListener("click", () => this.onStop());
@@ -94,12 +75,6 @@ export class Composer {
       e.stopPropagation();          // the aim is dropped; the composer stays open
       this.onUnaim();
     });
-    this.rawBtn.addEventListener("click", () => {
-      const open = this.rawEl.hidden;
-      this.rawEl.hidden = !open;
-      this.rawBtn.setAttribute("aria-expanded", String(open));
-    });
-
     this.form.addEventListener("submit", (e) => {
       e.preventDefault();
       const text = this.input.value.trim();
@@ -110,6 +85,12 @@ export class Composer {
 
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { e.stopPropagation(); this.close(); }
+    });
+    // Escape stops a running turn from anywhere — the reflex people already
+    // have. Guarded to `busy` so it cannot swallow the Escape that closes
+    // menus when nothing is running; `close()` above handles the idle case.
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.state === "busy") this.onStop();
     });
     // Clicking into the field IS opening it, now that there is no button in
     // front of it. `open()` focuses, so the guard stops it recursing.
@@ -142,18 +123,6 @@ export class Composer {
   get busy() { return this.state === "busy"; }
   get text() { return this.input.value; }
   /**
-   * Shrink to the hairline, or grow to the input.
-   *
-   * A request rather than a command: a running turn is always full, because it
-   * carries the activity, the stop button and the status, and a turn that ran
-   * invisibly would be worse than a composer that takes up room.
-   */
-  compact(yes: boolean) {
-    this.wantsCompact = yes;
-    this.paint();
-  }
-
-  /**
    * What this question is pointing at, in words.
    *
    * The anchor has always travelled with every turn — the agent was told which
@@ -170,20 +139,6 @@ export class Composer {
     // Faded means the block is no longer on screen — still pointed at, but the
     // reader cannot see it, so it should not look as certain as one they can.
     this.aimEl.classList.toggle("faded", Boolean(opts.faded));
-  }
-
-  /**
-   * Which workspace the next question is about.
-   *
-   * There used to be a second composer, inside the panel. Two inputs is a mode
-   * error: the reader could not tell which one they were typing into, and the
-   * answer changed depending on where the cursor had last been. One input, and
-   * a chip saying what it is aimed at.
-   */
-  context(name: string | null) {
-    this.ctxText.textContent = name ? `in ${name}` : "";
-    this.ctxEl.hidden = !name;
-    this.input.placeholder = name ? `Ask about ${name.toLowerCase()}…` : "Ask anything…";
   }
 
   placeholder(text: string) { this.input.placeholder = text; }
@@ -224,18 +179,14 @@ export class Composer {
   }
 
   /** A turn started. The pill floats while it runs, so it survives scrolling. */
-  working(asking?: string) {
+  working() {
     this.state = "busy";
-    // Keep the question on screen while the turn runs. Without it a turn shows
-    // a command and a spinner, and nothing saying what was even asked.
-    this.aim(asking ? `“${asking}”` : null, { cancellable: false });
-    this.verbEl.textContent = "Thinking";
-    this.verbEl.classList.remove("bad");
-    this.cmdEl.textContent = "";
-    this.outEl.textContent = "";
-    this.cmdEl.classList.remove("bad");
-    this.rawEl.hidden = true;
-    this.rawBtn.setAttribute("aria-expanded", "false");
+    // The question is NOT echoed here. It used to be, back when the composer
+    // was the only place a running turn was visible — but the ask is now drawn
+    // in the scroll the moment it is sent, so repeating it above the input
+    // meant the reader saw their sentence still sitting in the box and read
+    // that as "it did not send".
+    this.aim(null);
     if (this.root.parentElement !== this.floatHost) this.floatHost.append(this.root);
     this.paint();
   }
@@ -243,35 +194,6 @@ export class Composer {
   done() {
     this.state = "idle";
     this.paint();
-  }
-
-  /**
-   * What is happening, and — folded away — the command that is doing it.
-   *
-   * The reader gets a word they know; the raw command stays reachable behind
-   * the toggle for the moment it is the only thing that explains a failure.
-   */
-  activity(line: string, raw: string) {
-    this.verbEl.textContent = line;
-    this.verbEl.classList.remove("bad");
-    this.cmdEl.textContent = raw.split("\n")[0]!.slice(0, 200);
-    this.outEl.textContent = "";
-  }
-
-  /** A tail, not a log: evidence that something is happening, not a terminal. */
-  output(chunk: string) {
-    this.outEl.textContent = (this.outEl.textContent + chunk).split("\n").slice(-2).join("\n");
-  }
-
-  /**
-   * A command failed. The raw command opens itself: this is exactly the moment
-   * it stops being noise and starts being the answer.
-   */
-  commandFailed() {
-    this.verbEl.classList.add("bad");
-    this.cmdEl.classList.add("bad");
-    this.rawEl.hidden = false;
-    this.rawBtn.setAttribute("aria-expanded", "true");
   }
 
   status(text: string, tone: "" | "work" | "bad" = "") {
@@ -300,10 +222,10 @@ export class Composer {
 
   private paint() {
     this.root.dataset.state = this.state;
-    // Short only when there is nothing to say to it: no block pointed at, not
-    // at the end of the site, not focused, no turn running, and the pointer
-    // somewhere else.
-    const small = this.wantsCompact && this.state === "idle" && !this.hovering;
-    this.root.dataset.size = small ? "min" : "full";
+    // ONE SIZE, ALWAYS. It used to shrink to a hairline mid-scroll and grow at
+    // the foot of the site, so the thing you type into changed shape depending
+    // on where you had scrolled to — and its border came and went with it.
+    // A composer you cannot always see is one you have to go and find.
+    this.root.dataset.size = "full";
   }
 }

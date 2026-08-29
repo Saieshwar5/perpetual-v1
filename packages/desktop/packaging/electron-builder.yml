@@ -1,0 +1,96 @@
+# What ships. plans/38 §7 phase 3.
+#
+# The app directory is `stage/`, assembled by src/stage.ts — an allowlist of
+# files rather than the workspace with exclusions layered over it. So `files`
+# here can be everything: everything is already only what was named.
+
+appId: dev.perpetual.app
+productName: Perpetual
+copyright: Perpetual
+
+# Relative to the PACKAGE directory (where package.json is), not to this file.
+directories:
+  app: stage
+  output: release
+  buildResources: packaging
+
+files:
+  - "**/*"
+
+# ---------------------------------------------------------------------------
+# THE LINE THIS WHOLE PHASE IS ABOUT. §5.2.
+#
+# An asar archive is transparent to Node's fs, and to nothing else. These two
+# trees are bind-mounted into a bwrap namespace and exec'd by the kernel, and
+# neither operation can be done to a path inside an archive.
+#
+# They fail differently, which is why both are named and why the smoke test
+# checks both. `sandbox-bin` is mounted with `--ro-bind` and errors loudly if
+# it is missing. `adapters` is mounted with `--ro-bind-try`, which SUCCEEDS
+# SILENTLY — the app starts, the window renders, and the only symptom is
+# "tools: none" in a banner nobody is reading.
+# ---------------------------------------------------------------------------
+asarUnpack:
+  - "packages/controller/sandbox-bin/**"
+  - "packages/controller/adapters/**"
+
+linux:
+  # tar.gz FIRST, deliberately: it unpacks onto a plain filesystem, so if
+  # bwrap cannot get a user namespace the cause is Electron and not a FUSE
+  # mount. AppImage second, which is the same app plus exactly that variable.
+  #
+  # deb and rpm are the intended distribution formats and are NOT here, for a
+  # reason that is about this machine rather than about the plan:
+  # electron-builder builds them with a bundled `fpm`, whose Ruby needs
+  # `libcrypt.so.1`. Arch ships libxcrypt (`libcrypt.so.2`), so fpm dies with
+  # `error while loading shared libraries`. Fix on Arch:
+  #
+  #     pacman -S libxcrypt-compat        # then add deb, rpm below
+  #
+  # It is a build-host dependency only — nothing about the packages themselves
+  # needs it, and a CI image based on Debian or Ubuntu builds them unchanged.
+  target:
+    - tar.gz
+    - AppImage
+  category: Utility
+  # .deb and .rpm both refuse to build without one. Taken from the repo's own
+  # git identity — change it here and in src/stage.ts if the app changes hands.
+  maintainer: sai eshwar gandrath <saieshwargandrath5@gmail.com>
+  synopsis: An agent interface with no chat in it
+  description: >
+    Perpetual answers by building a website. One session is one site; its
+    pages are what you scroll between. The agent's only tool is a shell in a
+    bubblewrap sandbox whose writable paths are the session directory and one
+    folder you chose.
+  icon: packaging/icon.png
+  # bubblewrap is not a suggestion — the app refuses to start without it, on
+  # purpose (plans/37 §2 rule 2). Naming it as a dependency turns that refusal
+  # into something the package manager prevents rather than something the
+  # reader discovers.
+  desktop:
+    entry:
+      Name: Perpetual
+      Comment: An agent interface with no chat in it
+      Categories: Utility;Development;
+
+deb:
+  depends:
+    - bubblewrap
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+
+rpm:
+  depends:
+    - bubblewrap
+    - libsecret
+
+# Nothing is signed or published yet. Phase 6 owns the updater, and shipping an
+# updater before the app is worth updating is how you ship a bad update.
+publish: null

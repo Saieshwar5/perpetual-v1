@@ -3,8 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/server.ts",
+    "./paths": "./src/paths.ts",
+    "./shell/tool": "./src/shell/tool.ts",
+    "./shell/sandbox": "./src/shell/sandbox.ts"
+  },
   "scripts": {
-    "dev": "node --experimental-strip-types --env-file-if-exists=../../.env src/server.ts",
+    "dev": "node --experimental-strip-types --env-file-if-exists=../../.env src/cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "models": "node --experimental-strip-types src/models.ts",
     "report": "node --experimental-strip-types src/report-cli.ts",

@@ -22,6 +22,19 @@ export type TurnEvent =
   | { type: "turn_start"; ask: string }
   /** The model is thinking out loud, between tool calls. Status, not content. */
   | { type: "text_delta"; delta: string }
+  /**
+   * A spoken block is FORMING — the line the model is streaming, before it
+   * lands. plans/40, plans/43. Purely presentational.
+   *
+   * `kind` arrives first, from the line's opening field, and tells the client
+   * what SHAPE is coming so it can reserve the footprint — a chart-shaped or
+   * table-shaped skeleton rather than nothing at all. `text` follows for the
+   * blocks that have prose, and types itself out.
+   *
+   * Both carry the whole value so far rather than a delta, so a dropped event
+   * heals on the next one.
+   */
+  | { type: "forming"; page: string; text: string | null; kind: string | null }
 
   /** A shell command is about to run. */
   | { type: "tool_start"; id: string; command: string }
@@ -91,7 +104,9 @@ export type TurnEvent =
 export type StopCause =
   | "done" | "steps" | "time" | "aborted" | "error"
   /** Ran out of room to think in — stopped deliberately, before the provider refused. */
-  | "context";
+  | "context"
+  /** Failing the same way over and over, told so, and did not change course. */
+  | "stuck";
 
 export interface Usage {
   input: number;

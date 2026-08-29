@@ -41,6 +41,27 @@ export interface BlockBase {
   /** Lowercase, digits and dashes: `margin-trend`. Unique within its page. */
   id?: string;
   /**
+   * How wide this block is, in twelfths of the page. plans/39.
+   *
+   * The one field that turns a stack into a LAYOUT. Every block was full
+   * width, always, so a page could only ever be a column — which is the shape
+   * of a document, and the reason twelve good blocks still read as an essay.
+   * Three blocks at `span: 4` sit side by side; two at `span: 6` split the
+   * page in half; anything without a span stays full width, as before.
+   *
+   * NOT nesting, deliberately. A container block would have to be closed
+   * before it could be drawn, and pages here are appended one line at a time
+   * and rendered as they land — the reader watches the page assemble. A hint
+   * on a flat block keeps one line meaning one finished thing, so streaming,
+   * `page set <id>`, and the read-only seal all keep working untouched.
+   *
+   * The agent chooses the ARRANGEMENT; the stylesheet still chooses every
+   * pixel. `span: 4` says "one third"; what one third looks like is not the
+   * agent's business, which is what keeps a thousand sessions looking like one
+   * product.
+   */
+  span?: number;
+  /**
    * What this block REPLACES, as `<page>/<block-id>`.
    *
    * The agent cannot unwrite a published section, so a correction is a new
@@ -118,6 +139,18 @@ export interface Choice extends BlockBase {
   kind: "choice";
   /** What is being asked. One line: "Which report did you mean?" */
   prompt: string;
+  /**
+   * More than one option may be right — "delete which of these?".
+   *
+   * The reader toggles any number and confirms once, and the answer arrives
+   * as the picked ids joined with commas, in the order the options were
+   * written. One string, so the whole single-pick channel — the record, the
+   * Selection, the repaint after reload — carries it without knowing the
+   * difference.
+   */
+  multi?: boolean;
+  /** Multi only: what the confirming button says. "Delete these", "Compare them". */
+  submit?: string;
   options: {
     /** The agent's own token. It comes back verbatim; it never has to be parsed. */
     id: string;
@@ -161,6 +194,52 @@ export interface Figure extends BlockBase {
   svg?: string;
 }
 
+/**
+ * A picture. The one thing a `figure` cannot be.
+ *
+ * `figure` is SVG and only SVG, because SVG is markup and markup has to be
+ * sanitised before it can be inlined. A photograph, a screenshot, a page of a
+ * PDF rendered to PNG — none of those are markup, and none of them could be
+ * shown at all. "Show me what this looks like" is too ordinary an ask to have
+ * no answer.
+ *
+ * Never inlined. The bytes stay a file beside `page.ndjson` and the client
+ * fetches them from the controller by name, so a large picture costs one
+ * request rather than a megabyte of base64 in every event that mentions it.
+ */
+export interface Image extends BlockBase {
+  kind: "image";
+  /** An image filename in this page's own directory. No paths. */
+  src: string;
+  /** What it shows, for anyone who cannot see it. */
+  alt?: string;
+  caption?: string;
+}
+
+/**
+ * ASKING FOR A DIRECTORY — the one block whose button is not the agent's.
+ *
+ * A session writes in its own workspace and nowhere else. When the work
+ * genuinely needs somewhere on the reader's disk — "rename the resumes where
+ * they actually live" — the agent does not get it by asking in prose and
+ * hoping, and it certainly does not get it silently. It writes one of these:
+ * the path, and why.
+ *
+ * What makes it safe is where the ANSWER goes. Every other block's click is
+ * handed to the agent to interpret. This one's is not: Allow is chrome, wired
+ * to a controller endpoint the agent cannot reach, exactly like the workspace
+ * picker it extends. So the agent can request access and can never grant
+ * itself any — the same shape as the seal, where the rule lives somewhere the
+ * agent has no reach rather than somewhere it is asked to respect.
+ */
+export interface Grant extends BlockBase {
+  kind: "grant";
+  /** An absolute path, or one under `~`. Held to the home directory. */
+  path: string;
+  /** Why this work needs it. The reader is deciding, so give them the case. */
+  reason: string;
+}
+
 /* ------------------------------------------------------ the app quartet */
 
 /**
@@ -193,6 +272,15 @@ export interface Rows extends BlockBase {
   kind: "rows";
   /** Required: an action has to say which list it came from. */
   id: string;
+  /**
+   * Put a box above the list that narrows it as the reader types.
+   *
+   * Entirely the client's doing — no command, no turn, no cost — because
+   * "which of these says «margin»" is a question the reader's own eyes are
+   * already asking and the answer is sitting in the DOM. Worth having on any
+   * list long enough to scroll; noise on a list of three.
+   */
+  filter?: boolean;
   items: {
     id: string;
     title: string;
@@ -264,18 +352,71 @@ export interface Confirm extends BlockBase {
   run?: string;
 }
 
+/**
+ * A bounded box holding one idea. plans/39.
+ *
+ * The block that makes `span` worth having. Three paragraphs side by side are
+ * three paragraphs; three CARDS side by side are a comparison you can take in
+ * at a glance, because the border is what tells the eye where one thing ends
+ * and the next begins.
+ *
+ * `title` is optional because a card is sometimes just a bounded remark. When
+ * it has one it is two or three words — a label, not a sentence. The body
+ * takes the same three inline marks as prose.
+ */
+export interface Card extends BlockBase {
+  kind: "card";
+  title?: string;
+  text: string;
+  /** `accent` for the one that matters, `warn` for the one that bites. */
+  tone?: "plain" | "accent" | "warn";
+}
+
+/**
+ * One number, big, with what it measures and which way it is going. plans/39.
+ *
+ * `metrics` already shows two to four numbers as a fixed row — it is one
+ * block, and it decides its own arrangement. A `stat` is a single number that
+ * takes a `span` like anything else, so it can sit beside a chart, share a
+ * row with two others, or run four across. The difference is who arranges
+ * them: `metrics` does it for you, `stat` lets the agent compose.
+ *
+ * `delta` and `trend` are the interface half. A number alone is a fact; a
+ * number with a direction is information, and it is the thing a reader looks
+ * for first on any screen that reports on something.
+ */
+export interface Stat extends BlockBase {
+  kind: "stat";
+  /** The number, as text — "34%", "$4.2M", "9:1". Formatting is the agent's. */
+  value: string;
+  /** What it measures. Two or three words. */
+  label: string;
+  /** The movement, in the agent's own words: "+6 since Q2", "down from 41%". */
+  delta?: string;
+  /** Which way that movement points. Colour comes from here, never from the text. */
+  trend?: "up" | "down" | "flat";
+}
+
 export type Block =
   | Heading | Section | Prose | Quote | List | Metrics | Chart
-  | Table | Split | Flow | Code | Note | Link | Figure | Next | Choice
+  | Table | Split | Flow | Code | Note | Link | Figure | Image | Next | Choice
+  | Card | Stat | Grant
   | Rows | Fields | Form | Confirm;
 
 export type BlockKind = Block["kind"];
 
 export const BLOCK_KINDS: readonly BlockKind[] = [
   "heading", "section", "prose", "quote", "list", "metrics", "chart",
-  "table", "split", "flow", "code", "note", "link", "figure", "next", "choice",
+  "table", "split", "flow", "code", "note", "link", "figure", "image",
+  "next", "choice", "card", "stat", "grant",
   "rows", "fields", "form", "confirm",
 ];
+
+/** What an `image` may be. Raster only — markup goes through `figure`, sanitised. */
+export const IMAGE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.(png|jpe?g|gif|webp|avif)$/i;
+
+/** How many columns a page is divided into. Twelve, because it halves, thirds and quarters. */
+export const SPAN_COLUMNS = 12;
 
 /** The four that only mean anything in a workspace. See the quartet above. */
 export const APP_KINDS: readonly BlockKind[] = ["rows", "fields", "form", "confirm"];
@@ -379,17 +520,48 @@ export const BLOCK_DOCS: Record<BlockKind, BlockDoc> = {
     limits: "An SVG the agent writes beside the page. A viewBox is required, no width or "
       + "height, and no colour may be named — only currentColor and the palette tokens.",
   },
+  card: {
+    purpose: "A bounded box holding one idea, so several can sit side by side and be "
+      + "compared at a glance.",
+    example: '{"kind":"card","span":4,"title":"Intake","text":"The piston falls and '
+      + 'the inlet valve opens."}',
+    limits: "`tone` is \"plain\", \"accent\" or \"warn\". Give it a `span` — a card at "
+      + "full width is a note with a border.",
+  },
+  stat: {
+    purpose: "One number, large, with what it measures and which way it is moving.",
+    example: '{"kind":"stat","span":3,"value":"9:1","label":"Compression ratio",'
+      + '"delta":"vs 17:1 for diesel","trend":"flat"}',
+    limits: "`trend` is \"up\", \"down\" or \"flat\" and decides the colour. For two to "
+      + "four numbers you are not arranging yourself, `metrics` is less work.",
+  },
   next: {
     purpose: "The questions this page opened and did not answer. Clicking one asks it.",
     example: '{"kind":"next","items":["Why does gasoline stop at 9:1?"]}',
     limits: "1 to 5, at most one per page, and it is the last block.",
+  },
+  image: {
+    purpose: "A picture: a photograph, a screenshot, a rendered page.",
+    example: '{"kind":"image","src":"page-1.png","alt":"The first page of the resume",'
+      + '"caption":"Rendered from the PDF"}',
+    limits: "A .png/.jpg/.gif/.webp/.avif file beside page.ndjson. A drawing you " +
+      "generated as SVG is a `figure`.",
+  },
+  grant: {
+    purpose: "Ask the reader for write access to one directory.",
+    example: '{"kind":"grant","path":"~/Documents","reason":"to rename the resumes '
+      + 'where they actually live"}',
+    limits: "One directory, absolute or under `~`. The reader decides — you cannot " +
+      "grant yourself anything.",
   },
   choice: {
     purpose: "A question the agent cannot proceed without an answer to.",
     example: '{"kind":"choice","id":"which-file","prompt":"Which one did you mean?",'
       + '"options":[{"id":"a","label":"report-2025.pdf","hint":"~/Documents · 2.1 MB"},'
       + '{"id":"b","label":"report-final.pdf","hint":"~/Downloads · yesterday"}]}',
-    limits: "2 to 8 options, `id` required. The hint is what people decide by.",
+    limits: "2 to 8 options, `id` required. The hint is what people decide by. " +
+      "`\"multi\":true` lets several be picked at once; the answer returns as the " +
+      "ids joined with commas.",
   },
   rows: {
     purpose: "The list you scan and act on: an inbox, a file list, search results.",
@@ -532,6 +704,7 @@ export function textFields(b: Block): { where: string; text: string; honoured: b
       break;
     case "choice":
       out.push({ where: "prompt", text: b.prompt, honoured: false });
+      if (b.submit) out.push({ where: "submit", text: b.submit, honoured: false });
       b.options.forEach((o, i) => {
         out.push({ where: `options[${i}].label`, text: o.label, honoured: false });
         if (o.hint) out.push({ where: `options[${i}].hint`, text: o.hint, honoured: false });
@@ -569,8 +742,21 @@ export function textFields(b: Block): { where: string; text: string; honoured: b
       out.push({ where: "prompt", text: b.prompt, honoured: false });
       if (b.detail) out.push({ where: "detail", text: b.detail, honoured: false });
       break;
-    case "chart": case "figure":
+    case "chart": case "figure": case "image":
       if (b.caption) out.push({ where: "caption", text: b.caption, honoured: false });
+      break;
+    case "grant":
+      out.push({ where: "reason", text: b.reason, honoured: false });
+      break;
+    case "card":
+      // The body takes the inline marks; the title does not, for the same
+      // reason a heading does not — a label is already emphatic.
+      out.push({ where: "text", text: b.text, honoured: true });
+      if (b.title) out.push({ where: "title", text: b.title, honoured: false });
+      break;
+    case "stat":
+      out.push({ where: "label", text: b.label, honoured: false });
+      if (b.delta) out.push({ where: "delta", text: b.delta, honoured: false });
       break;
     // code is literal by definition; table cells and metric labels are data.
     default: break;
@@ -629,6 +815,19 @@ export function validateBlock(v: unknown): Valid<Block> {
       return bad(`\`id\` is ${JSON.stringify(v.id)}. An id is lowercase letters, ` +
         "digits and dashes, starting with a letter or digit, up to 40 characters — " +
         '`margin-trend`, `step-2`. It is a name you can refer to later.');
+    }
+  }
+
+  // Checked here rather than per-kind because it applies to every block. An
+  // out-of-range span is a layout that silently does not happen, so it is
+  // worth a sentence that says what the number means.
+  if (v.span != null) {
+    if (typeof v.span !== "number" || !Number.isInteger(v.span)
+        || v.span < 1 || v.span > SPAN_COLUMNS) {
+      return bad(`\`span\` is ${JSON.stringify(v.span)}. It is how many of ` +
+        `${SPAN_COLUMNS} columns this block fills — a whole number from 1 to ` +
+        `${SPAN_COLUMNS}. Three blocks at 4 sit side by side; two at 6 split ` +
+        "the page. Leave it out for full width.");
     }
   }
 
@@ -705,6 +904,19 @@ export function validateBlock(v: unknown): Valid<Block> {
         return bad("`options` must hold 2 to 8 entries. One is not a choice; more than " +
           "eight is a list the reader has to search, so narrow it first.");
       }
+      if (v.multi != null && typeof v.multi !== "boolean") {
+        return bad("`multi` is `true` or absent. It says several options may be picked " +
+          "together; it is not a count or a mode name.");
+      }
+      if (v.submit != null) {
+        if (!v.multi) {
+          return bad("`submit` only means something on a multi choice: it is the button " +
+            "that confirms several picks at once. A single pick needs no button.");
+        }
+        if (!str(v.submit)) {
+          return bad('`submit` must be the confirming button\'s label — "Delete these".');
+        }
+      }
       const seen = new Set<string>();
       for (const [i, o] of v.options.entries()) {
         if (!isRec(o)) return bad(`options[${i}] is not an object`);
@@ -721,6 +933,13 @@ export function validateBlock(v: unknown): Valid<Block> {
         if (!str(o.label)) return bad(`options[${i}].label is missing (what the reader reads)`);
         if (o.hint != null && !str(o.hint)) return bad(`options[${i}].hint is empty — omit it instead`);
         if (o.run != null) {
+          if (v.multi) {
+            // Several commands fired by one confirmation is not a thing the
+            // reader agreed to option by option. Per-item actions are `rows`.
+            return bad(`options[${i}].run cannot sit on a multi choice: the picks are ` +
+              "confirmed together and reach you as one answer. When each item needs " +
+              "its own command, that is `rows`.");
+          }
           if (!str(o.run) || (o.run as string).length > MAX_RUN) {
             return bad(`options[${i}].run must be a shell command under ${MAX_RUN} ` +
               "characters. It is what this row does when it is picked, and it runs in " +
@@ -734,6 +953,10 @@ export function validateBlock(v: unknown): Valid<Block> {
     /* ------------------------------------------------ the app quartet */
 
     case "rows": {
+      if (v.filter != null && typeof v.filter !== "boolean") {
+        return bad("`filter` is `true` or absent. It puts a box above the list that " +
+          "narrows it as the reader types.");
+      }
       if (!str(v.id)) {
         return bad('needs an `id`: a row\'s action has to say which list it came ' +
           'from. {"kind":"rows","id":"inbox",…}');
@@ -871,6 +1094,35 @@ export function validateBlock(v: unknown): Valid<Block> {
       break;
     }
 
+    case "card":
+      if (!str(v.text)) {
+        return bad("`text` must be a non-empty string — it is what the card says");
+      }
+      if (v.title != null && !str(v.title)) {
+        return bad("`title` is empty — omit it. A card without a title is fine; " +
+          "one with an empty heading is a gap the reader has to explain to themselves");
+      }
+      if (v.tone != null && !["plain", "accent", "warn"].includes(v.tone as string)) {
+        return bad('`tone` must be "plain", "accent" or "warn"');
+      }
+      break;
+
+    case "stat":
+      if (!str(v.value)) {
+        return bad('`value` is the number, written as text — "34%", "$4.2M", "9:1". ' +
+          "You choose the formatting; nothing downstream reformats it.");
+      }
+      if (!str(v.label)) return bad("`label` must say what the number measures");
+      if (v.delta != null && !str(v.delta)) {
+        return bad("`delta` is empty — omit it. It is the movement in words: " +
+          '"+6 since Q2"');
+      }
+      if (v.trend != null && !["up", "down", "flat"].includes(v.trend as string)) {
+        return bad('`trend` must be "up", "down" or "flat" — it is which way `delta` ' +
+          "points, and it is where the colour comes from");
+      }
+      break;
+
     case "figure": {
       if (!str(v.src)) return bad('`src` must name an .svg file beside page.ndjson, e.g. "flow.svg"');
       const src = v.src as string;
@@ -879,6 +1131,38 @@ export function validateBlock(v: unknown): Valid<Block> {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.svg$/.test(src)) {
         return bad(`\`src\` is "${src}" — it must be a plain .svg filename in this page's ` +
           "own directory. No slashes, no `..`, no absolute paths.");
+      }
+      break;
+    }
+
+    case "image": {
+      if (!str(v.src)) {
+        return bad('`src` must name an image file beside page.ndjson, e.g. "shot.png"');
+      }
+      if (!IMAGE_RE.test(v.src as string)) {
+        return bad(`\`src\` is "${v.src}" — it must be a plain .png, .jpg, .gif, .webp ` +
+          "or .avif filename in this page's own directory. No slashes, no `..`, no " +
+          "absolute paths. A drawing you generated as SVG is a `figure`, not an `image`.");
+      }
+      if (v.alt != null && !str(v.alt)) return bad("`alt` is empty — omit it instead");
+      if (v.caption != null && !str(v.caption)) return bad("`caption` is empty — omit it instead");
+      break;
+    }
+
+    case "grant": {
+      if (!str(v.path)) {
+        return bad('`path` must be the directory you need, e.g. "~/Documents". ' +
+          "One directory, named exactly.");
+      }
+      const path = v.path as string;
+      if (!path.startsWith("/") && !path.startsWith("~")) {
+        return bad(`\`path\` is "${path}" — it must be absolute or start with \`~\`. ` +
+          "The reader is deciding about a real place on their disk, so name it in full.");
+      }
+      if (path.includes("..")) return bad("`path` cannot contain `..` — name the directory itself.");
+      if (!str(v.reason)) {
+        return bad("`reason` must say what you would do with it, in one line — the reader " +
+          "is being asked to widen what you can change, and they decide on the reason.");
       }
       break;
     }

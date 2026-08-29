@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- The product in one mark: not a speech bubble, a PAGE. Perpetual's whole
+       claim is that the agent answers by writing one, so the icon says page
+       and never says chat. -->
+  <rect width="512" height="512" rx="112" fill="#131313"/>
+  <!-- The sheet, off-centre and overlapped, because a session is a stack of
+       them that you scroll rather than a single card. -->
+  <rect x="118" y="96" width="252" height="330" rx="10" fill="#2a2724"/>
+  <rect x="142" y="86" width="252" height="330" rx="10" fill="#efe9df"/>
+  <!-- A headline and a measure of prose. Enough structure to read as a
+       composed page at 32px, not so much that it turns into noise. -->
+  <rect x="172" y="128" width="150" height="26" rx="4" fill="#131313"/>
+  <g fill="#131313" opacity="0.42">
+    <rect x="172" y="180" width="192" height="11" rx="5"/>
+    <rect x="172" y="204" width="192" height="11" rx="5"/>
+    <rect x="172" y="228" width="140" height="11" rx="5"/>
+  </g>
+  <!-- The figure. The agent draws these; leaving it out would draw a chat app
+       that happens to have paper. -->
+  <rect x="172" y="268" width="192" height="96" rx="6" fill="#131313" opacity="0.10"/>
+  <g stroke="#c2410c" stroke-width="9" fill="none" stroke-linecap="round">
+    <path d="M188 344 L232 302 L268 326 L348 288"/>
+  </g>
+</svg>

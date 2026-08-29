@@ -27,12 +27,18 @@ const GROUPS: { title: string; note: string; kinds: BlockKind[] }[] = [
   },
   {
     title: "Words",
-    note: "Prose is the default, not the fallback.",
+    note: "The connective tissue between the other shapes.",
     kinds: ["prose", "quote", "list", "note", "code"],
   },
   {
+    title: "Laid out",
+    note: "Objects that take a `span` and sit beside each other. Any block may "
+      + "carry `span` — these two exist to be arranged.",
+    kinds: ["card", "stat"],
+  },
+  {
     title: "Numbers",
-    note: "Only when the content genuinely is that shape.",
+    note: "When the shape of the numbers is the point.",
     kinds: ["metrics", "chart", "table"],
   },
   {

@@ -73,6 +73,18 @@ export interface BlockActions {
   act?: (blockId: string, option: string, label: string) => void;
   /** A form was submitted, with what the reader typed into it. */
   submit?: (blockId: string, values: Record<string, string | boolean>) => void;
+
+  /* ----------------------------------------------------- pictures, access */
+
+  /**
+   * Where the bytes of a picture live. The caller knows which page or
+   * workspace it is rendering; this block only knows a filename.
+   */
+  asset?: (src: string) => string;
+  /** The reader allowed a directory. Goes to the controller, never the agent. */
+  allow?: (path: string) => void;
+  /** Has this path already been allowed? Then the block is a record, not a question. */
+  granted?: (path: string) => boolean;
 }
 
 /**
@@ -125,6 +137,11 @@ export function renderBlock(b: Block, on: BlockActions = {}): HTMLElement {
   // in one pass afterwards. The marking cannot happen here: the block it names
   // usually lives in another section, which may not be rendered yet.
   if (b.supersedes) node.dataset.supersedes = b.supersedes;
+  // How wide, in twelfths. A data attribute rather than an inline style: the
+  // stylesheet decides what four twelfths looks like, and at what width it
+  // stops meaning anything and everything goes back to one column. The agent
+  // supplies the arrangement; it never supplies a pixel. plans/39.
+  if (b.span) node.dataset.span = String(b.span);
   return node;
 }
 
@@ -185,9 +202,44 @@ function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
       return wrap;
     }
 
+    /* ------------------------------------------------ the layout pair */
+
+    case "card": {
+      // A bordered box, and the border is the whole point: it is what tells
+      // the eye where one idea stops and the next starts, which is what makes
+      // three of them side by side readable as a comparison rather than as
+      // three paragraphs that happen to be short.
+      const c = el("div", `card${b.tone && b.tone !== "plain" ? ` ${b.tone}` : ""}`);
+      if (b.title) c.append(el("h3", "cardt", b.title));
+      const body = el("p", "cardb");
+      body.append(inline(b.text));
+      c.append(body);
+      return c;
+    }
+
+    case "stat": {
+      const s = el("div", `stat${b.trend ? ` ${b.trend}` : ""}`);
+      s.append(el("span", "v", b.value), el("span", "k", b.label));
+      // The arrow comes from `trend`, never from the words — an agent writing
+      // "▲ +6%" into `delta` would be styling, and styling is not its job.
+      if (b.delta) {
+        const d = el("span", "d");
+        if (b.trend && b.trend !== "flat") {
+          d.append(el("i", "arrow", b.trend === "up" ? "↑" : "↓"));
+        }
+        d.append(document.createTextNode(b.delta));
+        s.append(d);
+      }
+      return s;
+    }
+
     case "chart": {
       const wrap = el("figure", "chartwrap");
       const c = el("div", "chart");
+      // Transitions are enabled one frame AFTER the bars have their heights,
+      // so the first paint is static and only a later data change animates.
+      // See `.chart.settled` — this is the other half of that rule.
+      requestAnimationFrame(() => c.classList.add("settled"));
       const max = Math.max(...b.values, 1);
       b.values.forEach((v, i) => {
         const col = el("div", "col");
@@ -238,29 +290,66 @@ function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
       // The reader answers by touching one. The three states are the ones a
       // door already has — open, taken, and the siblings it closed — because a
       // decision, once made, should stay on the page as the record of it.
+      //
+      // A MULTI choice answers with several: tapping toggles, and one button
+      // confirms. The answer is the picked ids joined with commas — a single
+      // string, so everything downstream of here (the record, the Selection,
+      // the repaint after reload) carries it without knowing the difference.
       const wrap = el("div", "choice");
       const answeredWith = b.id ? on.picked?.(b.id) ?? null : null;
+      const taken = new Set(answeredWith ? answeredWith.split(",") : []);
       wrap.append(el("p", "cprompt", b.prompt));
 
       const opts = el("div", "copts");
+      const picked = new Set<string>();
+      let go: HTMLButtonElement | null = null;
+
       for (const o of b.options) {
         const btn = el("button", "copt");
         btn.type = "button";
         btn.append(el("span", "clabel", o.label));
         if (o.hint) btn.append(el("span", "chint", o.hint));
 
-        if (answeredWith === o.id) {
+        if (taken.has(o.id)) {
           btn.classList.add("taken");
           btn.disabled = true;
         } else if (answeredWith) {
           btn.classList.add("spent");
           btn.disabled = true;
+        } else if (b.multi) {
+          // Toggling is free — nothing leaves the page until the confirm.
+          btn.setAttribute("aria-pressed", "false");
+          btn.addEventListener("click", () => {
+            const now = !picked.has(o.id);
+            picked[now ? "add" : "delete"](o.id);
+            btn.classList.toggle("picked", now);
+            btn.setAttribute("aria-pressed", String(now));
+            if (go) go.disabled = picked.size === 0;
+          });
         } else {
           btn.addEventListener("click", () => on.choose?.(b, { id: o.id, label: o.label }));
         }
         opts.append(btn);
       }
       wrap.append(opts);
+
+      if (b.multi && !answeredWith) {
+        go = el("button", "cgo");
+        go.type = "button";
+        go.disabled = true;
+        go.textContent = b.submit ?? "These ones";
+        go.addEventListener("click", () => {
+          // In the order the options were WRITTEN, not the order they were
+          // tapped — the agent wrote the list and reads the answer against it.
+          const sel = b.options.filter((o) => picked.has(o.id));
+          if (!sel.length) return;
+          on.choose?.(b, {
+            id: sel.map((o) => o.id).join(","),
+            label: sel.map((o) => o.label).join(", "),
+          });
+        });
+        wrap.append(go);
+      }
       return wrap;
     }
 
@@ -270,8 +359,10 @@ function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
       // A list you scan and act on, not a question you answer. The row itself
       // is the primary action; anything beside it is secondary and looks it.
       const wrap = el("div", "rows");
+      const rows: { row: HTMLElement; hay: string }[] = [];
       for (const it of b.items) {
         const row = el("div", `row${it.state ? ` is-${it.state}` : ""}`);
+        rows.push({ row, hay: `${it.title} ${it.meta ?? ""} ${it.note ?? ""}`.toLowerCase() });
         const main = el("button", "rowmain");
         main.type = "button";
         main.append(el("span", "rowtitle", it.title));
@@ -296,7 +387,31 @@ function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
         }
         wrap.append(row);
       }
-      return wrap;
+
+      // Narrowing a long list is the reader's own eyes, done faster. No
+      // command, no turn, no cost — every row is already here, so hiding the
+      // ones that do not match is the whole of it.
+      if (!b.filter) return wrap;
+      const box = el("div", "rowsfilter");
+      const input = document.createElement("input");
+      input.type = "search";
+      input.placeholder = `Filter ${b.items.length} rows…`;
+      input.setAttribute("aria-label", "Filter this list");
+      const count = el("span", "rowscount");
+      input.addEventListener("input", () => {
+        const q = input.value.trim().toLowerCase();
+        let shown = 0;
+        for (const { row, hay } of rows) {
+          const hit = !q || hay.includes(q);
+          row.hidden = !hit;
+          if (hit) shown++;
+        }
+        count.textContent = q && shown !== rows.length ? `${shown} of ${rows.length}` : "";
+      });
+      box.append(input, count);
+      const outer = el("div", "rowsbox");
+      outer.append(box, wrap);
+      return outer;
     }
 
     case "fields": {
@@ -403,6 +518,57 @@ function buildBlock(b: Block, on: BlockActions = {}): HTMLElement {
       return fig;
     }
 
+    case "image": {
+      const fig = el("figure", "figure image");
+      const img = document.createElement("img");
+      // The controller serves it by name out of the page's own directory. The
+      // agent never puts bytes or a URL on the wire — only a filename that had
+      // to look like one to get this far.
+      img.src = on.asset?.(b.src) ?? "";
+      img.alt = b.alt ?? b.caption ?? "";
+      img.loading = "lazy";
+      // A picture whose file is missing is a broken icon and a mystery. Say so.
+      img.addEventListener("error", () => {
+        img.replaceWith(el("div", "imggone", `${b.src} is not in this page's directory`));
+      });
+      fig.append(img);
+      if (b.caption) fig.append(el("figcaption", undefined, b.caption));
+      return fig;
+    }
+
+    case "grant": {
+      // The agent asks; the CHROME answers. `allow` goes to a controller
+      // endpoint nothing in the sandbox can reach, so this block can request
+      // access and can never grant any.
+      const wrap = el("div", "grant");
+      const done = on.granted?.(b.path) ?? false;
+      wrap.append(el("p", "gpath", b.path));
+      wrap.append(el("p", "greason", b.reason));
+
+      const acts = el("div", "gacts");
+      if (done) {
+        wrap.classList.add("allowed");
+        acts.append(el("span", "gdone", "Allowed for this session"));
+      } else {
+        const yes = el("button", "gyes");
+        yes.type = "button";
+        yes.textContent = "Allow";
+        yes.addEventListener("click", () => on.allow?.(b.path));
+        const no = el("button", "gno");
+        no.type = "button";
+        no.textContent = "Not now";
+        no.addEventListener("click", () => {
+          // Declining is local and quiet: nothing is granted, nobody is asked,
+          // and the reader is not made to explain themselves to a machine.
+          wrap.classList.add("declined");
+          acts.replaceChildren(el("span", "gdone", "Not allowed"));
+        });
+        acts.append(yes, no);
+      }
+      wrap.append(acts);
+      return wrap;
+    }
+
     case "flow": {
       const f = el("div", "flow");
       b.steps.forEach((step, i) => {
@@ -419,6 +585,12 @@ export function appendBlock(
   host: HTMLElement, block: Block, on: BlockActions = {},
 ): HTMLElement {
   const node = renderBlock(block, on);
+  // The grid is opt-in per page, and this is the one place that turns it on —
+  // which is why it lives here rather than in the two callers. A page becomes
+  // a grid the moment its FIRST spanned block lands, including mid-stream, so
+  // a section that starts as prose and later lays out three cards does not
+  // have to be re-rendered to get its columns. plans/39.
+  if (block.span) host.classList.add("spans");
   host.append(node);
   if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
     node.animate(

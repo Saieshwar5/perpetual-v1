@@ -4,9 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Perpetual</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;450;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
+<!-- The three families, from this machine. They used to come from
+     fonts.googleapis.com, which meant the first run without a network was a
+     different-looking product — and, once the desktop build gained a real
+     CSP, the only thing on it that was not 'self'. plans/38 §5.5. -->
+<link rel="stylesheet" href="/fonts/fonts.css">
 <link rel="stylesheet" href="/style.css">
 <script>
   // Before first paint: a deferred module would flash the wrong theme.
@@ -64,9 +66,11 @@
       <!-- The environment, kept where the chrome lives. It is a fact about the
            session, and the composer is already carrying the aim, the status
            and the turn. -->
+      <!-- Only the money lives here now. The provider and the sandbox are
+           configuration, and configuration reads in settings — a chip you see
+           four hundred times a day stops being information. Cost is the one
+           number that changes while you work, so it stays in view. -->
       <div class="env wide">
-        <span class="chip" id="badge"></span>
-        <span class="chip" id="sandbox"></span>
         <span class="chip spent" id="spent" hidden></span>
       </div>
     </div>
@@ -77,51 +81,75 @@
        asked. -->
   <main class="site" id="site"></main>
 
-  <!-- The workspace: where you WORK with the agent, beside where you read what
-       it wrote. It appears when the agent opens one — a file search, a mail
-       list — and it is the one surface here that is allowed to change under
-       you, because working in something is not reading a record. -->
-  <section class="panel-app" id="apppanel" hidden aria-label="Workspace">
-    <header class="phead">
-      <span class="ptitle"></span>
-      <span class="pview"></span>
-      <button class="sidebtn pwide" type="button" aria-label="Widen the workspace">⤢</button>
-      <button class="sidebtn pclose" type="button" aria-label="Close the workspace">✕</button>
-    </header>
-    <div class="ptabs" hidden></div>
-    <div class="pbody"></div>
-    <div class="pnote" hidden></div>
-  </section>
-
-  <!-- Reader settings. Chrome, never the canvas: the agent cannot see or
-       reach any of this. Anchored beside the sidebar's foot, where its
-       button is. -->
+  <!-- Settings: the platform's control room. Chrome, never the canvas — the
+       agent cannot see or reach any of this, and that boundary is why keys,
+       the sandbox and the tools can live here at all. One overlay, sections
+       down the page; the agent's world is configured in the one place the
+       agent does not exist. -->
   <div class="prefs" id="prefs" hidden>
-    <div class="pgroup">Appearance</div>
-    <div class="prow">
-      <span>Theme</span>
-      <div class="seg" data-key="theme">
-        <button type="button" data-v="system">System</button>
-        <button type="button" data-v="light">Light</button>
-        <button type="button" data-v="dark">Dark</button>
+    <header class="prefhead">
+      <span class="preftitle">Settings</span>
+      <button class="prefclose" type="button" aria-label="Close settings">✕</button>
+    </header>
+    <div class="prefbody">
+
+      <div class="pgroup">Appearance</div>
+      <div class="prow">
+        <span>Theme</span>
+        <div class="seg" data-key="theme">
+          <button type="button" data-v="system">System</button>
+          <button type="button" data-v="light">Light</button>
+          <button type="button" data-v="dark">Dark</button>
+        </div>
       </div>
-    </div>
-    <div class="pgroup">Reading</div>
-    <div class="prow">
-      <span>Text size</span>
-      <div class="seg" data-key="type">
-        <button type="button" data-v="small">S</button>
-        <button type="button" data-v="normal">M</button>
-        <button type="button" data-v="large">L</button>
-        <button type="button" data-v="larger">XL</button>
+      <div class="prow">
+        <span>Text size</span>
+        <div class="seg" data-key="type">
+          <button type="button" data-v="small">S</button>
+          <button type="button" data-v="normal">M</button>
+          <button type="button" data-v="large">L</button>
+          <button type="button" data-v="larger">XL</button>
+        </div>
       </div>
-    </div>
-    <div class="prow">
-      <span>Page width</span>
-      <div class="seg" data-key="measure">
-        <button type="button" data-v="normal">Normal</button>
-        <button type="button" data-v="wide">Wide</button>
+      <div class="prow">
+        <span>Page width</span>
+        <div class="seg" data-key="measure">
+          <button type="button" data-v="normal">Normal</button>
+          <button type="button" data-v="wide">Wide</button>
+        </div>
       </div>
+
+      <div class="pgroup">Models &amp; keys</div>
+      <p class="prefnote">A provider with a key offers its models in the composer's
+        model menu. Keys are write-only: they are stored, never shown back.</p>
+      <div id="setproviders"></div>
+
+      <div class="pgroup">What the agent can do</div>
+      <p class="prefnote">Tools are not the boundary — an agent with a shell and
+        Python can rebuild any tool it is denied. What can be controlled, and is,
+        are the four consequences below. Everything else it may freely compute
+        with: grep, python, ffmpeg, whatever is installed. That is its hands.</p>
+      <div id="setsandbox"></div>
+
+      <div class="pgroup">Harness</div>
+      <p class="prefnote">The loop that runs every turn. Four dials are yours;
+        the rest are calibrations — shown, because a stopped turn should be
+        traceable to the exact rule that stopped it, and fixed, because they
+        interact in ways that degrade quietly when guessed at.</p>
+      <div id="setharness"></div>
+
+      <div class="pgroup">Tools</div>
+      <p class="prefnote">What the agent may drive, and whether each one's
+        self-test passed.</p>
+      <div id="settools"></div>
+
+      <div class="pgroup">The agent's instructions</div>
+      <p class="prefnote">Exactly what the agent is told, every turn. Nothing about
+        this product is easier for the agent to know than for you.</p>
+      <details class="prefprompt"><summary>Show the prompt</summary>
+        <pre id="setprompt"></pre>
+      </details>
+
     </div>
   </div>
 
@@ -129,20 +157,14 @@
        is nothing to re-parent it between. It is short while there is still
        site to read and grows at the foot of it. -->
   <div class="floathost" id="floathost">
+    <!-- Background jobs, while any run: things happening on this machine in
+         the reader's name must be visible and stoppable, always. -->
+    <div class="jobsbar" id="jobsbar" hidden></div>
     <div class="pill" id="pill" data-state="idle">
       <!-- What the question points at, and the way to stop pointing at it. -->
       <div class="aim" hidden>
         <span class="aimtext"></span>
         <button class="aimoff" type="button" aria-label="Ask about the page instead">×</button>
-      </div>
-
-      <!-- Which workspace the question is about. There used to be a second
-           composer inside the panel; a reader could not tell which of the two
-           they were typing into, and the answer changed depending on where the
-           cursor had last been. One input, and it says what it is aimed at. -->
-      <div class="ctx" hidden>
-        <span class="ctxtext"></span>
-        <button class="ctxoff" type="button" aria-label="Ask about the site instead">×</button>
       </div>
 
       <!-- Always a field, never a button that hides one. It is SHORT when
@@ -153,19 +175,11 @@
         <span class="enter">↵</span>
       </form>
 
+      <!-- The only thing about a running turn that belongs in the input: the
+           way to stop it. What the agent is DOING is drawn in the scroll,
+           beside the answer it is producing. plans/41. -->
       <div class="work">
-        <!-- What is happening, in words. The command that produced it is one
-             click away rather than in the reader's face: hidden by default,
-             never deleted, because when something fails it is the only thing
-             that explains it. -->
-        <span class="verb"></span>
-        <button class="rawbtn" type="button" aria-expanded="false"
-                aria-label="Show the command being run">⋯</button>
         <button class="stop" type="button" aria-label="Stop this turn">■</button>
-        <div class="raw" hidden>
-          <code class="cmd"></code>
-          <pre class="out"></pre>
-        </div>
       </div>
 
       <div class="pstatus"></div>
@@ -187,6 +201,8 @@
       <!-- The directory picker. A server-backed browser: the browser's own
            picker hands back a handle, and what the sandbox needs is a path. -->
       <div class="picker" id="picker" hidden>
+        <!-- Where this session writes, and the way to take any of it back. -->
+        <div class="pickwrites"></div>
         <div class="pickhead">
           <button class="pickup" type="button" aria-label="Up one level">↑</button>
           <span class="pickpath"></span>

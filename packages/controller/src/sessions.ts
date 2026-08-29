@@ -57,12 +57,20 @@ export class SessionStore {
     await rename(tmp, path);              // atomic: no half-written index on crash
   }
 
-  async create(): Promise<SessionIndex> {
+  /**
+   * @param workdir where this session may write, beside its own record.
+   *                Defaults to the shared workspace; see dirs.ts. plans/42.
+   */
+  async create(workdir?: string): Promise<SessionIndex> {
     const id = randomBytes(6).toString("hex");
     const now = new Date().toISOString();
     const index: SessionIndex = {
       id, title: "New session", createdAt: now, updatedAt: now, pageCount: 0,
       asks: [], answered: {}, chosen: {},
+      // A session is BORN with a workspace. It used to be born with none, so
+      // the agent's only writable path was its own record until the reader
+      // found the picker — and most never did.
+      ...(workdir ? { workdir } : {}),
     };
     // The agent's world is created empty but complete, so its first command
     // never has to guess at the layout.

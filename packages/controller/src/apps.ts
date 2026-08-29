@@ -20,8 +20,10 @@
  * — one heading, first; doors last — because it is a document. A view is a
  * screen: a list, a detail, a form. It may be any blocks in any order.
  */
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat, access } from "node:fs/promises";
+import { constants } from "node:fs";
 import { join } from "node:path";
+import { toolsDir } from "./paths.ts";
 import { validateBlock, type Block } from "@perpetual/shared/blocks";
 import type { AppView, Problem } from "@perpetual/shared/site";
 
@@ -32,6 +34,100 @@ const APP_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /** A view is a screen, not a document — but it is not a scroll either. */
 const MAX_BLOCKS = 40;
+
+/**
+ * Does this view's every `run` name a command that will actually run?
+ *
+ * The failure this catches, from a real session: the agent invented a verb —
+ * rows saying `run: "show <file>"` for a helper it never put anywhere — and
+ * the reader was the first to find out, with `bash: show: command not found`
+ * on the click. A click is far too late; the agent still has steps left NOW.
+ *
+ * Deliberately conservative. Only a bare first word is judged (a path, a
+ * quote, a variable — anything shell-shaped is left to the shell), builtins
+ * pass, and a word found ANYWHERE it could run from passes: the tools dir,
+ * an adapter's bin, the host PATH, or the workspace's own directory — which
+ * the act runner puts on the PATH precisely so a shipped helper works.
+ */
+const SH_BUILTINS = new Set([
+  "cd", "echo", "printf", "test", "[", "[[", "set", "export", "exit", "read",
+  "source", ".", ":", "eval", "exec", "wait", "shift", "local", "return",
+  "if", "then", "else", "elif", "fi", "for", "while", "until", "case", "do",
+  "done", "true", "false", "!", "command", "builtin", "type", "umask", "trap",
+]);
+const WORD_RE = /^[A-Za-z0-9._+-]+$/;
+
+const canRun = (p: string) => access(p, constants.X_OK).then(() => true, () => false);
+const isThere = (p: string) => access(p).then(() => true, () => false);
+
+async function badRun(
+  appsDir: string, id: string, run: string, binDirs: string[],
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  // Leading VAR=value assignments are environment, not the command.
+  let rest = run.trim();
+  for (;;) {
+    const m = /^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/.exec(rest);
+    if (!m) break;
+    rest = rest.slice(m[0].length);
+  }
+  const word = rest.split(/[\s;|&<>()]/, 1)[0] ?? "";
+  if (!word || word.includes("/") || !WORD_RE.test(word)) return null;
+  if (SH_BUILTINS.has(word)) return null;
+  if (cache.has(word)) return cache.get(word)!;
+
+  let verdict: string | null = null;
+  const own = join(appsDir, id, word);
+  if (await isThere(own)) {
+    verdict = (await canRun(own)) ? null
+      : `\`${word}\` exists in ui/apps/${id}/ but is not executable — ` +
+        `\`chmod +x ui/apps/${id}/${word}\` and it will run.`;
+  } else {
+    let found = false;
+    for (const dir of [toolsDir(), ...binDirs]) {
+      if (await canRun(join(dir, word))) { found = true; break; }
+    }
+    if (!found) {
+      for (const dir of (process.env.PATH ?? "").split(":")) {
+        if (dir && await canRun(join(dir, word))) { found = true; break; }
+      }
+    }
+    if (!found) {
+      verdict = `\`${word}\` is not a command the click can run: not a tool, not ` +
+        `installed, and not a file in ui/apps/${id}/. Adapter commands are two ` +
+        "words (`files show …`, `mail read …`); a helper of your own belongs in " +
+        `ui/apps/${id}/, executable, and is then on the PATH for this workspace's ` +
+        "clicks.";
+    }
+  }
+  cache.set(word, verdict);
+  return verdict;
+}
+
+/** Every command a view's blocks would run on a click, with where it sits. */
+function runsIn(b: Block): { where: string; run: string }[] {
+  const out: { where: string; run: string }[] = [];
+  switch (b.kind) {
+    case "choice":
+      b.options.forEach((o, i) => { if (o.run) out.push({ where: `options[${i}]`, run: o.run }); });
+      break;
+    case "rows":
+      b.items.forEach((it, i) => {
+        if (it.run) out.push({ where: `items[${i}]`, run: it.run });
+        it.actions?.forEach((a, j) => {
+          if (a.run) out.push({ where: `items[${i}].actions[${j}]`, run: a.run });
+        });
+      });
+      break;
+    case "form":
+      if (b.run) out.push({ where: "submit", run: b.run });
+      break;
+    case "confirm":
+      if (b.run) out.push({ where: "confirm", run: b.run });
+      break;
+  }
+  return out;
+}
 
 export interface AppRead {
   app: AppView;
@@ -50,7 +146,7 @@ async function signature(dir: string): Promise<string> {
 
 export type AppCache = Map<string, { sig: string; read: AppRead }>;
 
-async function readApp(appsDir: string, id: string): Promise<AppRead> {
+async function readApp(appsDir: string, id: string, binDirs: string[]): Promise<AppRead> {
   const problems: Problem[] = [];
 
   let title = id;
@@ -82,6 +178,7 @@ async function readApp(appsDir: string, id: string): Promise<AppRead> {
   const complete = lastNl === -1 ? "" : raw.slice(0, lastNl);
 
   const blocks: Block[] = [];
+  const runCache = new Map<string, string | null>();
   let lineNo = 0;
   for (const line of complete.split("\n")) {
     lineNo++;
@@ -98,6 +195,10 @@ async function readApp(appsDir: string, id: string): Promise<AppRead> {
     }
     const v = validateBlock(parsed);
     if (!v.ok) { problems.push({ page: id, line: lineNo, message: v.error }); continue; }
+    for (const { where, run } of runsIn(v.value)) {
+      const bad = await badRun(appsDir, id, run, binDirs, runCache);
+      if (bad) problems.push({ page: id, line: lineNo, message: `${where}: ${bad}` });
+    }
     blocks.push(v.value);
   }
 
@@ -117,7 +218,9 @@ async function readApp(appsDir: string, id: string): Promise<AppRead> {
 }
 
 /** Every workspace the session currently has open. */
-export async function readApps(siteDir: string, cache?: AppCache): Promise<{
+export async function readApps(
+  siteDir: string, cache?: AppCache, binDirs: string[] = [],
+): Promise<{
   apps: AppView[]; problems: Problem[];
 }> {
   const appsDir = join(siteDir, APPS_REL);
@@ -144,13 +247,13 @@ export async function readApps(siteDir: string, cache?: AppCache): Promise<{
         problems.push(...hit.read.problems);
         continue;
       }
-      const read = await readApp(appsDir, name);
+      const read = await readApp(appsDir, name, binDirs);
       cache.set(name, { sig, read });
       apps.push(read.app);
       problems.push(...read.problems);
       continue;
     }
-    const read = await readApp(appsDir, name);
+    const read = await readApp(appsDir, name, binDirs);
     apps.push(read.app);
     problems.push(...read.problems);
   }
@@ -248,23 +351,27 @@ export function fieldEnv(
  */
 export class AppWatcher {
   private siteDir: string;
+  private binDirs: string[];
   private prev = new Map<string, string>();
   private cache: AppCache = new Map();
   private seen = new Set<string>();
   private fresh: Problem[] = [];
 
-  constructor(siteDir: string) { this.siteDir = siteDir; }
+  constructor(siteDir: string, binDirs: string[] = []) {
+    this.siteDir = siteDir;
+    this.binDirs = binDirs;
+  }
 
   /** Adopt what is already there without emitting. Used at turn start. */
   async prime(): Promise<AppView[]> {
-    const { apps, problems } = await readApps(this.siteDir, this.cache);
+    const { apps, problems } = await readApps(this.siteDir, this.cache, this.binDirs);
     this.prev = new Map(apps.map((a) => [a.id, JSON.stringify(a)]));
     for (const p of problems) this.seen.add(`${p.page}:${p.line ?? 0}:${p.message}`);
     return apps;
   }
 
   async poll(): Promise<import("@perpetual/shared/events").TurnEvent[]> {
-    const { apps, problems } = await readApps(this.siteDir, this.cache);
+    const { apps, problems } = await readApps(this.siteDir, this.cache, this.binDirs);
     const events: import("@perpetual/shared/events").TurnEvent[] = [];
     const next = new Map<string, string>();
 
