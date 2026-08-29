@@ -19,9 +19,7 @@ import { SessionStore } from "./sessions.ts";
 import { readSite } from "./site.ts";
 import { readApps, commandFor, fieldEnv, APPS_REL } from "./apps.ts";
 import { readAdapters, adaptersDir, type Adapter } from "./adapters.ts";
-import { Broker, credential, READ_PROFILE } from "./broker.ts";
-import { resolveUnlocked, unlockBanner } from "./unlocked.ts";
-import type { Unlocked } from "./shell/sandbox.ts";
+import { listDirs, within } from "./dirs.ts";
 import { createShell } from "./shell/tool.ts";
 import { runTurn } from "./agent.ts";
 import { bwrapAvailable, describeSandbox, type SandboxConfig } from "./shell/sandbox.ts";
@@ -45,7 +43,10 @@ const PROVIDER = process.env.PERPETUAL_PROVIDER ?? "anthropic";
 const KEY_ENV = PROVIDERS[PROVIDER]?.keyEnv ?? "ANTHROPIC_API_KEY";
 const API_KEY = process.env[KEY_ENV];
 const UNSAFE = process.env.PERPETUAL_UNSAFE === "1";
-const NET = process.env.PERPETUAL_NET === "1";
+// ON unless explicitly turned off. The agent may run anything installed, and
+// most of what is installed is useless offline — a default of "off" shipped a
+// sandbox whose headline feature did not work until you found the flag.
+const NET = process.env.PERPETUAL_NET !== "0";
 
 const store = new SessionStore(ROOT);
 const inFlight = new Set<string>();
@@ -95,17 +96,54 @@ if (!UNSAFE && !bwrapAvailable()) {
   process.exit(1);
 }
 
-let runtime: Runtime | null = null;
+/**
+ * Which models the composer may offer. plans/37.
+ *
+ * A short, curated list rather than everything a provider sells: the chip is a
+ * choice, and a menu of forty is not a choice. `PERPETUAL_MODELS` overrides it
+ * for anyone working against something else.
+ */
+const MODELS = (process.env.PERPETUAL_MODELS ??
+  "claude-opus-5,claude-sonnet-5,claude-haiku-4-5-20251001")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+
+const DEFAULT_MODEL = process.env.PERPETUAL_MODEL ?? MODELS[0];
+
+/**
+ * Runtimes, built on demand and kept.
+ *
+ * They used to be built once at boot, which is why changing model needed a
+ * restart. A runtime is a provider client and a model id — cheap to hold, and
+ * there are three of them — so the cache is a Map and the model becomes a
+ * property of the conversation rather than of the process.
+ */
+const runtimes = new Map<string, Runtime>();
 let runtimeError: string | null = null;
-try {
-  runtime = REPLAY ? createReplayRuntime() : createRuntime({
-    provider: PROVIDER,
-    ...(API_KEY ? { apiKey: API_KEY } : {}),
-    ...(process.env.PERPETUAL_MODEL ? { model: process.env.PERPETUAL_MODEL } : {}),
-  });
-} catch (e) {
-  runtimeError = e instanceof Error ? e.message : String(e);
+
+function runtimeFor(model?: string): Runtime | null {
+  if (REPLAY) {
+    if (!runtimes.has("replay")) runtimes.set("replay", createReplayRuntime());
+    return runtimes.get("replay")!;
+  }
+  const id = model && MODELS.includes(model) ? model : DEFAULT_MODEL;
+  const held = runtimes.get(id);
+  if (held) return held;
+  try {
+    const made = createRuntime({
+      provider: PROVIDER,
+      ...(API_KEY ? { apiKey: API_KEY } : {}),
+      ...(id ? { model: id } : {}),
+    });
+    runtimes.set(id, made);
+    return made;
+  } catch (e) {
+    runtimeError = e instanceof Error ? e.message : String(e);
+    return null;
+  }
 }
+
+/** The one built at boot, so a bad key or provider is a startup error. */
+const runtime = runtimeFor();
 
 /**
  * The adapters, read once at boot.
@@ -119,31 +157,27 @@ try {
 const LOCAL_ADAPTERS = join(ROOT, "tools");
 let HAS_LOCAL_ADAPTERS = false;
 let ADAPTERS: Adapter[] = [];
-/** Which Google credential mail would run against, or null when there is none. */
-let MAIL_CREDENTIAL: string | null = null;
-/**
- * The escape hatch, resolved once at boot. plans/36.
- *
- * `undefined` is the normal state and means locked. It is deliberately not a
- * per-session or per-turn decision: what the sandbox contains is harness
- * config, and the model must not be able to ask its way into it.
- */
-let UNLOCKED: Unlocked | undefined;
 
 /**
- * One broker for the server, listening per session only while a command runs.
+ * Credential directories put back into the namespace, by name. plans/37.
  *
- * It is what lets a sandbox with no network and no credential read a mailbox:
- * the reach is out here, behind a fixed table of verbs. See broker.ts.
+ * Harness config, never a per-turn decision: naming `gws` here says "sessions
+ * on this machine may act as me in Gmail", and that is a sentence the reader
+ * says, not one the agent can talk its way into.
  */
-const BROKER = new Broker();
+const CREDS = (process.env.PERPETUAL_CREDENTIALS ?? "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
 
-const sandboxFor = (id: string, sealed: string[] = []): SandboxConfig => ({
+const sandboxFor = (
+  id: string, sealed: string[] = [], workdir?: string,
+): SandboxConfig => ({
   root: store.siteDir(id), net: NET, unsafe: UNSAFE, sealed,
-  ...(UNLOCKED ? { unlocked: UNLOCKED } : {}),
+  sessionsRoot: ROOT,
   adapters: adaptersDir(),
   ...(HAS_LOCAL_ADAPTERS ? { localAdapters: LOCAL_ADAPTERS } : {}),
   binPaths: ADAPTERS.filter((a) => a.hasBin).map((a) => `${a.path}/bin`),
+  ...(workdir ? { workdir } : {}),
+  ...(CREDS.length ? { credentials: CREDS } : {}),
 });
 
 /**
@@ -260,13 +294,15 @@ async function turn(req: IncomingMessage, res: ServerResponse, id: string) {
   // tab left the turn running to completion.
   onClientGone(req, res, () => ac.abort());
 
+  // The session's model, not the process's. Built on first use and kept.
+  const forThisTurn = runtimeFor(index.model) ?? runtime;
+
   const stream = runTurn({
     ask: input,
-    runtime,
-    sandbox: sandboxFor(id, sealedFor(before, index)),
+    runtime: forThisTurn,
+    sandbox: sandboxFor(id, sealedFor(before, index), index.workdir),
     pastAsks: index.asks,
     adapters: ADAPTERS,
-    broker: BROKER,
     ...(anchor?.page ? {
       anchor: {
         page: anchor.page,
@@ -403,8 +439,9 @@ async function act(req: IncomingMessage, res: ServerResponse, id: string) {
   // the client asks it as a turn instead — this says so rather than guessing.
   if (!found) return json(res, 200, { ran: false, app: view });
 
-  const shell = createShell(sandboxFor(id, sealedFor(await readSite(store.siteDir(id)),
-    await store.read(id))), BROKER);
+  const idx = await store.read(id);
+  const shell = createShell(sandboxFor(
+    id, sealedFor(await readSite(store.siteDir(id)), idx), idx.workdir));
   const r = await shell.run({
     command: found.run,
     timeoutSec: ACT_TIMEOUT_SEC,
@@ -425,6 +462,41 @@ async function act(req: IncomingMessage, res: ServerResponse, id: string) {
   });
 }
 
+/**
+ * What the reader chose for this session: where it may write, and which model.
+ *
+ * Both are CHROME decisions, which is why they arrive here rather than through
+ * anything the agent can reach. A turn that could widen its own write access
+ * would make the working directory a suggestion.
+ */
+async function settings(req: IncomingMessage, res: ServerResponse, id: string) {
+  if (inFlight.has(id)) return json(res, 409, { error: "a turn is running" });
+  const body = await new Promise<string>((r) => {
+    let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b));
+  });
+  const { workdir, model } = JSON.parse(body || "{}") as
+    { workdir?: string | null; model?: string | null };
+
+  const index = await store.read(id);
+  if (workdir !== undefined) {
+    if (workdir === null || workdir === "") delete index.workdir;
+    else {
+      const full = within(workdir);
+      if (!full) return json(res, 400, { error: "That is outside your home directory." });
+      const ok = await stat(full).then((s) => s.isDirectory(), () => false);
+      if (!ok) return json(res, 400, { error: `There is no directory at ${full}.` });
+      index.workdir = full;
+    }
+  }
+  if (model !== undefined) {
+    if (model === null || model === "") delete index.model;
+    else if (!MODELS.includes(model)) return json(res, 400, { error: "unknown model" });
+    else index.model = model;
+  }
+  await store.write(index);
+  return json(res, 200, index);
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
   const p = url.pathname;
@@ -434,14 +506,21 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         ok: true,
         model: runtime?.modelId ?? null,
+        models: MODELS,
         provider: REPLAY ? "replay" : PROVIDER,
         hasKey: REPLAY || Boolean(API_KEY),
         replay: REPLAY,
-        sandbox: describeSandbox({
-          root: "", net: NET, unsafe: UNSAFE, ...(UNLOCKED ? { unlocked: UNLOCKED } : {}),
-        }),
+        sandbox: describeSandbox({ root: "", net: NET, unsafe: UNSAFE,
+          ...(CREDS.length ? { credentials: CREDS } : {}) }),
         root: ROOT,
       });
+    }
+    // The directory picker's backing store. Names of directories, nothing else.
+    if (p === "/dirs") {
+      return json(res, 200, await listDirs(url.searchParams.get("path") ?? undefined));
+    }
+    if (p === "/models") {
+      return json(res, 200, { models: MODELS, current: runtime?.modelId ?? null });
     }
     if (p === "/sessions" && req.method === "POST") return json(res, 200, await store.create());
     if (p === "/sessions" && req.method === "GET") {
@@ -451,9 +530,10 @@ const server = createServer(async (req, res) => {
       return json(res, 200, await store.list());
     }
 
-    const m = /^\/sessions\/([a-f0-9]+)(\/turn|\/site|\/rendered|\/apps|\/act)?$/.exec(p);
+    const m = /^\/sessions\/([a-f0-9]+)(\/turn|\/site|\/rendered|\/apps|\/act|\/settings)?$/.exec(p);
     if (m) {
       const id = m[1]!;
+      if (m[2] === "/settings" && req.method === "POST") return await settings(req, res, id);
       if (m[2] === "/turn" && req.method === "POST") return await turn(req, res, id);
       if (m[2] === "/rendered" && req.method === "POST") return await rendered(req, res, id);
       if (m[2] === "/act" && req.method === "POST") return await act(req, res, id);
@@ -505,34 +585,24 @@ server.on("error", (e: NodeJS.ErrnoException) => {
 // an adapter with a broken manifest is one the agent will never be told about,
 // which looks exactly like an adapter that was never installed.
 {
-  // Before anything else, and a refusal rather than a downgrade: a session that
-  // quietly fell back to locked is one where the test results mean nothing.
-  const unlock = await resolveUnlocked();
-  if (unlock && "error" in unlock) {
-    console.error(`\n  ${unlock.error}\n`);
-    process.exit(1);
-  }
-  UNLOCKED = unlock?.unlocked;
-
   HAS_LOCAL_ADAPTERS = await stat(LOCAL_ADAPTERS).then((s) => s.isDirectory(), () => false);
   const { adapters, problems } = await readAdapters(
     HAS_LOCAL_ADAPTERS ? LOCAL_ADAPTERS : undefined);
   ADAPTERS = adapters;
   for (const p of problems) console.error(`  tool ${p.name}: ${p.message}`);
 
-  // A tool that needs a credential we do not have is told about ANYWAY, with
+  // A tool whose credential is not in the namespace is told about ANYWAY, with
   // the reason attached. The agent then declines for the right cause instead of
-  // trying and reading a stack trace, and the reader learns there is something
-  // to configure rather than that mail was never built.
-  const cred = await credential();
-  MAIL_CREDENTIAL = "error" in cred ? null
-    : cred.readOnly ? "read-only profile" : "PERPETUAL_GWS_CONFIG_DIR override";
+  // running a command and reading a stack trace, and the reader learns there is
+  // something to configure rather than that the tool was never built.
   for (const a of ADAPTERS) {
-    if ("error" in cred && a.needs.includes("broker:mail")) {
-      a.unavailable = "no read-only Google credential is set up on this machine";
-    }
-    if (!UNLOCKED && a.needs.includes("unlocked")) {
-      a.unavailable = "this session is locked — the tool is not mounted";
+    const missing = a.needs
+      .filter((n) => n.startsWith("credential:"))
+      .map((n) => n.slice("credential:".length))
+      .filter((n) => !CREDS.includes(n));
+    if (missing.length) {
+      a.unavailable = `${missing.join(", ")} is not visible in the sandbox — ` +
+        `add it to PERPETUAL_CREDENTIALS`;
     }
   }
 }
@@ -543,13 +613,10 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`  model     ${runtime?.modelId ?? runtimeError ?? "unavailable"}`);
   console.log(`  key       ${REPLAY ? "replay mode (no key needed)"
     : API_KEY ? `${KEY_ENV} set` : `${KEY_ENV} NOT SET — /turn will 503`}`);
-  console.log(`  sandbox   ${describeSandbox({
-    root: "", net: NET, unsafe: UNSAFE, ...(UNLOCKED ? { unlocked: UNLOCKED } : {}),
-  })}`);
+  console.log(`  sandbox   ${describeSandbox({ root: "", net: NET, unsafe: UNSAFE,
+    ...(CREDS.length ? { credentials: CREDS } : {}) })}`);
   console.log(`  sessions  ${ROOT}`);
-  console.log(`  mail      ${MAIL_CREDENTIAL ?? `unavailable — no credential at ${READ_PROFILE}`}`);
   console.log(`  tools     ${ADAPTERS.length
     ? ADAPTERS.map((a) => a.name + (a.local ? "*" : "")).join(", ")
     : "none"}\n`);
-  if (UNLOCKED) console.log(unlockBanner(UNLOCKED, NET));
 });

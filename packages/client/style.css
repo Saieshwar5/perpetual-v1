@@ -787,20 +787,6 @@ html[data-side="min"] .srow { justify-content: center; }
 }
 .pnote.bad { color: var(--warn); }
 
-/* Its own input. What you type in the middle is about the site; what you type
-   here is about the work in front of you, and the agent is told which. */
-.pask { border-top: 1px solid var(--line); padding: 10px; }
-.pask form {
-  display: flex; align-items: center; gap: 10px;
-  background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px;
-  padding: 8px 12px;
-}
-.pask form:focus-within { border-color: var(--accent); }
-.pask input {
-  flex: 1; min-width: 0; background: none; border: 0; outline: none;
-  font: inherit; font-size: .85rem; color: var(--ink);
-}
-.pask input::placeholder { color: var(--ink-3); }
 
 @media (max-width: 1100px) {
   /* No room to split: the workspace covers the site rather than squeezing it
@@ -1029,6 +1015,94 @@ html[data-side="min"] .srow { justify-content: center; }
 .site.atend ~ .floathost .aim { padding-left: 0; }
 .pill[data-state="idle"] .aim { display: none; }
 .pill[data-state="busy"] .aim { color: var(--ink-2); font-style: italic; }
+
+/* Which workspace the question is about. There used to be a second composer
+   inside the panel; two inputs is a mode error, and a reader could not tell
+   which one they were typing into. One input, and a chip saying where it points. */
+.pill .ctx {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 12px 0; font-size: .72rem; color: var(--ink-2);
+  letter-spacing: .02em;
+}
+.pill .ctxtext {
+  background: var(--surface-2); border-radius: 5px; padding: 2px 7px;
+  font-family: var(--mono); font-size: .68rem;
+}
+.pill .ctxoff {
+  background: none; border: 0; border-radius: 5px; line-height: 1;
+  padding: 1px 5px 3px; font-size: .95rem; color: inherit; opacity: .65;
+}
+.pill .ctxoff:hover { opacity: 1; background: var(--surface-2); }
+.site.atend ~ .floathost .ctx { padding-left: 0; }
+.pill[data-state="idle"] .ctx { display: none; }
+
+/* ------------------------------------------------ what this session can do
+
+   Where the agent may write, and which model answers. Chrome, and it matters
+   that it IS chrome: a working directory the agent could draw would be a
+   working directory it could talk the reader into widening. */
+.pill .pbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 12px 10px; margin-top: -2px;
+}
+.pill[data-state="idle"] .pbar { display: none; }
+.barbtn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: 1px solid var(--line); border-radius: 6px;
+  padding: 3px 8px; cursor: pointer;
+  font-family: var(--mono); font-size: .66rem; color: var(--ink-3);
+  max-width: 190px; white-space: nowrap; overflow: hidden;
+}
+.barbtn:hover { border-color: var(--line-2); color: var(--ink-2); }
+.barbtn.on { color: var(--accent); border-color: var(--accent-sf); }
+.barbtn .barlabel { overflow: hidden; text-overflow: ellipsis; }
+.barbtn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+
+/* The picker, and the model menu, which is the same thing with fewer parts. */
+.picker {
+  /* Hung off the composer, which is the positioned thing it belongs to. The
+     float host is pointer-events:none, so this has to put them back. */
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
+  pointer-events: auto;
+  width: min(360px, 84vw); max-height: 340px; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18); overflow: hidden;
+}
+.picker.menu { width: min(240px, 70vw); padding: 5px; }
+.pickhead {
+  display: flex; align-items: center; gap: 8px; padding: 9px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.pickpath {
+  font-family: var(--mono); font-size: .7rem; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
+}
+.pickup {
+  background: none; border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 7px; cursor: pointer; color: var(--ink-2); font-size: .78rem;
+}
+.pickup:disabled { opacity: .35; cursor: default; }
+.picklist { flex: 1; overflow-y: auto; padding: 5px; }
+.pickrow {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; border-radius: 6px; cursor: pointer;
+  padding: 6px 9px; font: inherit; font-size: .78rem; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pickrow:hover { background: var(--surface-2); }
+.pickrow.on { color: var(--accent); }
+.pickempty { padding: 14px 10px; font-size: .75rem; color: var(--ink-3); }
+.pickfoot {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-top: 1px solid var(--line);
+}
+.pickfoot button {
+  background: none; border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 11px; cursor: pointer; font: inherit; font-size: .74rem;
+  color: var(--ink-2);
+}
+.pickfoot .pickuse { border-color: var(--accent); color: var(--accent); }
+.pickfoot button:hover { background: var(--surface-2); }
 
 /* ------------------------------------------------------------- choice */
 

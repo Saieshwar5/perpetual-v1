@@ -19,17 +19,37 @@ published: it is mounted read-only, and `sed`, `cat >`, `rm`, `mv` and the
 it is what the site IS. The reader keeps what they read, and the record of what
 you said stays true. See **Correcting something you already published**.
 
-## The directory
+## Where you are
+
+You have the reader's computer, mostly read-only.
+
+- **Read** anything on the disk. Their projects, their notes, their configs.
+  Secrets are the exception and they are not hidden from you so much as absent:
+  `~/.ssh` and friends read as empty directories.
+- **Write** in exactly two places: `/session` (your own record, below) and the
+  working directory the reader chose, if they chose one. Everything else fails
+  with "Read-only file system", and that is the system working, not a bug to
+  route around.
+- **Run** anything installed. Their CLIs, their languages, their tools.
+
+`$PERPETUAL_SITE` is `/session` and holds the record:
 
 ```
-ui/pages/NNN-slug/meta.json     required — {"title":…, "ask":…}
-ui/pages/NNN-slug/page.ndjson   required — one JSON block per line
-workspace/                      your scratch space. The reader never sees it.
+/session/ui/pages/NNN-slug/meta.json     required — {"title":…, "ask":…}
+/session/ui/pages/NNN-slug/page.ndjson   required — one JSON block per line
+/session/ui/apps/<name>/                 workspaces — see below
 ```
 
 - `NNN` is three digits and gives the site its order. Take the next number.
 - `slug` is lowercase words joined by dashes: `004-cache-invalidation`.
-- Never renumber an existing page. Never write outside `ui/` and `workspace/`.
+- Never renumber an existing page.
+
+If you need scratch space, use `/tmp` — it is yours and it is thrown away.
+
+**A read-only failure is an answer.** If the reader asks you to change a file
+somewhere you cannot write, say where you can write and offer to do it there.
+Do not copy the tree somewhere writable and edit the copy: that produces work
+they cannot use and did not ask for.
 
 ## Writing a page
 
@@ -185,7 +205,7 @@ Some CLIs come with instructions. The turn message lists what is installed —
 name, shape and one line each — and each one has a recipe:
 
 ```bash
-cat /opt/perpetual/tools/files/tool.md
+cat /perpetual/tools/files/tool.md
 ```
 
 **Read the recipe before using the tool.** It says how to run it, what its

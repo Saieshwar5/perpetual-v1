@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
-"""mail — read Gmail from inside the sandbox, and draw what comes back.
+"""mail — read Gmail, and draw what comes back.
 
-This program holds no credential and cannot reach the network. It asks the
-broker, over a unix socket in the session directory, and the broker runs `gws`
-outside the sandbox against a read-only Google credential. See ../tool.md.
+Runs `gws` directly. There used to be a broker outside the sandbox holding the
+credential, back when the sandbox could see neither the disk nor the network;
+now that it can see both, that machinery was a wrapper around a CLI the agent
+could simply run, so it is gone.
 
-Like `files`, it writes the workspace view itself: the mapping from a message
-to a row is stable enough to be code, and code cannot drift between one session
-and the next.
+What survives is the part that was always the point: this writes the workspace
+view ITSELF. The mapping from a message to a row is stable enough to be code,
+and code cannot drift between one session and the next.
+
+Reading only. Writing mail is deliberately not here — see ../tool.md.
 """
 import json
 import os
-import socket
+import subprocess
 import sys
 import time
 from email.utils import parsedate_to_datetime
 
 APP = "mail"
-SOCK = os.path.join(".perpetual", "broker.sock")
 BODY_LIMIT = 6000
 NOTE_LIMIT = 110
 
@@ -38,33 +40,32 @@ def die(*lines):
     sys.exit(2)
 
 
-def ask(verb, **args):
-    """One call to the broker. Its refusals are messages, not stack traces."""
-    path = os.path.join(site(), SOCK)
-    if not os.path.exists(path):
-        die("the broker is not listening, so mail is unavailable in this session.",
-            "This is not something to work around — say so and move on.")
+def gws(*args):
+    """One read-only gws call, as an argument vector.
+
+    Never a shell string: a subject or a query that happened to contain a
+    semicolon would otherwise be a second command. Same rule the workspace
+    forms follow for reader-authored values.
+    """
     try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(60)
-        s.connect(path)
-        s.sendall((json.dumps({"verb": verb, "args": args}) + "\n").encode())
-        buf = b""
-        while b"\n" not in buf:
-            chunk = s.recv(65536)
-            if not chunk:
-                break
-            buf += chunk
-        s.close()
-    except OSError as e:
-        die(f"could not reach the broker ({e}).")
+        r = subprocess.run(["gws", *args], capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        die("the `gws` CLI is not installed on this machine.",
+            "Say so plainly — there is no other route to the mailbox.")
+    except subprocess.TimeoutExpired:
+        die("gws did not answer within a minute.")
+
+    if r.returncode != 0:
+        why = (r.stderr or r.stdout or f"gws exited {r.returncode}").strip()
+        if any(w in why.lower() for w in ("token", "credential", "auth", "login", "expired")):
+            die("the Google credential is not working:", why[-400:], "",
+                "It may not be visible in this sandbox. Add `gws` to",
+                "PERPETUAL_CREDENTIALS and restart the controller.")
+        die(*why[-600:].splitlines())
     try:
-        reply = json.loads(buf.decode().strip() or "{}")
+        return json.loads(r.stdout)
     except ValueError:
-        die("the broker sent something that is not JSON.")
-    if not reply.get("ok"):
-        die(*(reply.get("error") or "the broker refused, without saying why.").split("\n"))
-    return reply.get("data")
+        die("gws did not return JSON. Nothing was read.")
 
 
 def write_view(view, blocks):
@@ -117,7 +118,8 @@ def clip(text, n):
 
 
 def cmd_list(query, max_n):
-    data = ask("mail.list", query=query, max=max_n) or {}
+    data = gws("gmail", "+triage", "--format", "json",
+               "--max", str(max_n), "--query", query) or {}
     messages = data.get("messages") or []
     unread = query == "is:unread"
 
@@ -156,7 +158,7 @@ def cmd_list(query, max_n):
 
 
 def cmd_show(msg_id):
-    m = ask("mail.show", id=msg_id) or {}
+    m = gws("gmail", "+read", "--id", msg_id, "--headers", "--format", "json") or {}
     subject = m.get("subject") or "(no subject)"
     sender = m.get("from") or {}
     to = m.get("to") or []
@@ -200,11 +202,9 @@ USAGE = """mail — read Gmail, and draw the result in a workspace.
   mail list [--unread|--query Q] [--max N]   the inbox, as a list to pick from
   mail show <id>                             one message, in full
 
-Reading only. There is no send, no reply and no delete: this program asks a
-broker outside the sandbox, and the broker's credential cannot write.
-
-See the recipe beside it for what the views look like, and for when a mail
-question wants a sentence rather than a workspace."""
+Reading only. There is no send, reply or delete here — see the recipe beside
+this program for why, for what the views look like, and for when a mail
+question wants a sentence rather than a whole workspace."""
 
 
 def main(argv):
@@ -212,9 +212,9 @@ def main(argv):
         print(USAGE)
         return 0
     if argv[0] == "--self-test":
-        data = ask("mail.list", max=1)
+        data = gws("gmail", "+triage", "--format", "json", "--max", "1")
         n = len((data or {}).get("messages") or [])
-        print(f"mail: ok — the broker answered ({n} message read)")
+        print(f"mail: ok — gws answered ({n} message read)")
         return 0
 
     cmd, rest = argv[0], argv[1:]

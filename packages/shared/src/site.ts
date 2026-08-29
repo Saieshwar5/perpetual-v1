@@ -196,6 +196,17 @@ export interface SessionIndex {
    * able to decide what counts as published.
    */
   open?: string[];
+  /**
+   * The one directory outside the session this session may WRITE to, chosen by
+   * the reader in the composer. An absolute path on the reader's machine.
+   *
+   * Kept here rather than in the site, and set only through the chrome, for the
+   * same reason `open` is: the agent must not be able to widen its own reach.
+   * Absent means the session writes only its own record.
+   */
+  workdir?: string;
+  /** The model this session is talking to, when the reader has picked one. */
+  model?: string;
   createdAt: string;
   updatedAt: string;
   pageCount: number;

@@ -126,7 +126,7 @@ test("the turn message gets names and shapes — never the recipes", async () =>
   const blocked = describeAdapters(
     adapters.map((a) => ({ ...a, unavailable: "no credential" })))!;
   assert.match(blocked, /\[UNAVAILABLE: no credential; needs credential:gmail, net\]/);
-  assert.match(line, /cat \/opt\/perpetual\/tools/, "it says where to read the rest");
+  assert.match(line, /cat \/perpetual\/tools/, "it says where to read the rest");
   assert.doesNotMatch(line, /# Mail/, "the recipe stays on disk");
   assert.ok(line.length < 1200, "an index that grows like a prompt is not an index");
   await rm(d, { recursive: true, force: true });
@@ -158,7 +158,15 @@ test("the built-in adapters are readable, and say what they are", async () => {
   const mail = adapters.find((a) => a.name === "mail")!;
   assert.equal(mail.surface, "either",
     "an inbox is a workspace; `how many unread` is a sentence — same tool");
-  assert.deepEqual(mail.needs, ["broker:mail"]);
+  assert.deepEqual(mail.needs, ["credential:gws"]);
+
+  // Two adapters over one CLI, and the split is the interesting part: `mail`
+  // reads and draws, `gws` can write. The summaries have to say so, because
+  // that one line is all the agent is given before it picks.
+  const gws = adapters.find((a) => a.name === "gws")!;
+  assert.deepEqual(gws.needs, ["credential:gws"]);
+  assert.match(gws.summary, /can send|can write|delete/i);
+  assert.match(mail.summary, /reading only/i);
   assert.ok(adaptersDir().endsWith("adapters"));
 });
 
